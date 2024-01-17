@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hyperspectral Image Viewer</title>
+    <style>
+        #dropZone {
+            border: 2px dashed #0087F7;
+            border-radius: 5px;
+            background: #F3F4F6;
+            padding: 20px;
+            text-align: center;
+            margin: 10px;
+        }
+
+        #dropZone.hover {
+            background-color: #E2E6EA;
+        }
+
+        .container {
+            display: flex;
+        }
+
+        .image-container {
+            max-width: 50%; /* or your preferred size */
+            max-height: 400px; /* or your preferred size */
+        }
+
+        #displayedImage {
+            max-width: 50%; /* Adjust as needed */
+            height: auto;
+            object-fit: cover;
+        }
+
+        #spectrumChart {
+            max-width: 50%; /* Adjust as needed */
+            max-height: 400px; /* or your preferred size */
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+<body>
+<h1>Upload an H5 File</h1>
+<div id="dropZone">Drag and drop an H5 file here</div>
+<div>
+    <label for="band1">Band 1:</label>
+    <input type="range" id="band1" min="0" max="223" value="50">
+    <label for="band2">Band 2:</label>
+    <input type="range" id="band2" min="0" max="223" value="100">
+    <label for="band3">Band 3:</label>
+    <input type="range" id="band3" min="0" max="223" value="150">
+
+</div>
+<div class="container">
+    <img id="displayedImage" src="" alt="HSI Image"/>
+    <canvas id="spectrumChart" width="400" height="400"></canvas>
+</div>
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const displayedImage = document.getElementById('displayedImage');
+    const band1Slider = document.getElementById('band1');
+    const band2Slider = document.getElementById('band2');
+    const band3Slider = document.getElementById('band3');
+
+    dropZone.addEventListener('dragover', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        dropZone.classList.add('hover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('hover');
+    });
+
+    dropZone.addEventListener('drop', (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        dropZone.classList.remove('hover');
+        const file = event.dataTransfer.files[0];
+        uploadFile(file);
+    });
+
+    function uploadFile(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/upload', {
+            method: 'POST',
+            body: formData
+        }).then(response => response.blob())
+            .then(blob => {
+                displayedImage.src = URL.createObjectURL(blob);
+            });
+    }
+
+    function updateRGBImage() {
+        const band1 = document.getElementById('band1').value;
+        const band2 = document.getElementById('band2').value;
+        const band3 = document.getElementById('band3').value;
+
+        fetch(`/get_rgb_image?band1=${band1}&band2=${band2}&band3=${band3}`)
+            .then(response => response.blob())
+            .then(blob => {
+                displayedImage.src = URL.createObjectURL(blob);
+            });
+    }
+
+    // Event listeners for the sliders
+    band1Slider.addEventListener('input', updateRGBImage);
+    band2Slider.addEventListener('input', updateRGBImage);
+    band3Slider.addEventListener('input', updateRGBImage);
+    const spectrumCanvas = document.getElementById('spectrumChart');
+    let spectrumChart = null;
+
+    function displaySpectrum(x, y) {
+        fetch(`/get_spectrum?x=${x}&y=${y}`)
+            .then(response => response.json())
+            .then(spectrum => {
+                if (spectrumChart) {
+                    spectrumChart.destroy();
+                }
+                spectrumChart = new Chart(spectrumCanvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: Array.from({length: spectrum.length}, (_, i) => i + 1),
+                        datasets: [{
+                            label: `Spectrum at (${x}, ${y})`,
+                            data: spectrum,
+                            fill: false,
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        scales: {
+                            y: {beginAtZero: true}
+                        }
+                    }
+                });
+            });
+    }
+
+    displayedImage.addEventListener('mousemove', (event) => {
+        const rect = displayedImage.getBoundingClientRect();
+        const x = Math.floor(event.clientX - rect.left);
+        const y = Math.floor(event.clientY - rect.top);
+        {#console.log(`rect: ${JSON.stringify(rect)}`);#}
+        {#console.log(`event.clientX: ${event.clientX}, event.clientY: ${event.clientY}`);#}
+        {#console.log(`Calculated - x: ${x}, y: ${y}`);#}
+
+        displaySpectrum(x, y);
+    });
+
+</script>
+</body>
+</html>
