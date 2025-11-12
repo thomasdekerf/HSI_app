@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import ViewerCanvas from "./ViewerCanvas";
 import SpectraPlot from "./SpectraPlot";
+import { hexToBase64 } from "../utils/image";
 
 const REGION_COLORS = [
   "#ff3b30",
@@ -14,13 +15,6 @@ const REGION_COLORS = [
   "#ff2d55",
   "#bf5af2",
 ];
-
-function hexToBase64(hex) {
-  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
-  let bin = "";
-  bytes.forEach((b) => (bin += String.fromCharCode(b)));
-  return window.btoa(bin);
-}
 
 function formatBandLabel(band) {
   if (band === undefined || band === null) return "-";
