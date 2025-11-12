@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Node
+frontend/node_modules/
+frontend_new/node_modules/
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Data
+*.hdr
+*.raw
+*.npy
+*.tif
+*.png
+*.jpg
