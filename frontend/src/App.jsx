@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import DropZone from "./components/DropZone";
+import { useState, useEffect, useCallback } from "react";
 import HSIViewer from "./components/HSIViewer";
 import { getRGB } from "./api";
 
@@ -38,14 +37,42 @@ export default function App() {
   const [rgb, setRgb] = useState(null);
   const [idxs, setIdxs] = useState([0, 0, 0]);
   const [warning, setWarning] = useState("");
+  const [loadingDataset, setLoadingDataset] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
-  const handleLoaded = (data) => {
-    const parsedBands = normalizeBands(data.bands || []);
-    setBands(parsedBands);
-    setIdxs(chooseInitialIndices(parsedBands));
-    setWarning(data.warning || "");
-    setRgb(null);
-  };
+  const handleLoaded = useCallback(async (path) => {
+    if (!path) {
+      setLoadError("Please provide a folder or .hdr path.");
+      return;
+    }
+
+    setLoadingDataset(true);
+    setLoadError("");
+    try {
+      const body = new FormData();
+      body.append("folder_path", path);
+      const res = await fetch("http://127.0.0.1:8000/load", {
+        method: "POST",
+        body,
+      });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to load dataset");
+      }
+
+      const parsedBands = normalizeBands(data.bands || []);
+      setBands(parsedBands);
+      setIdxs(chooseInitialIndices(parsedBands));
+      setWarning(data.warning || "");
+      setRgb(null);
+    } catch (err) {
+      console.error("Failed to load dataset", err);
+      setLoadError(err.message || "Failed to load dataset");
+    } finally {
+      setLoadingDataset(false);
+    }
+  }, []);
 
   // when idxs or bands change, re-fetch image
   useEffect(() => {
@@ -55,15 +82,18 @@ export default function App() {
   }, [idxs, bands]);
 
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: 20, height: "100%", boxSizing: "border-box" }}>
       <h2>HSI Viewer</h2>
-      <DropZone onLoaded={handleLoaded} />
-      {warning && (
-        <div style={{ marginTop: 10, color: "#b58900" }}>{warning}</div>
-      )}
-      {bands.length > 0 && (
-        <HSIViewer bands={bands} rgb={rgb} idxs={idxs} onChange={setIdxs} />
-      )}
+      <HSIViewer
+        bands={bands}
+        rgb={rgb}
+        idxs={idxs}
+        onChange={setIdxs}
+        onLoadDataset={handleLoaded}
+        loadingDataset={loadingDataset}
+        loadError={loadError}
+        warning={warning}
+      />
     </div>
   );
 }
