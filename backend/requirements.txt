@@ -4,3 +4,4 @@ opencv-python
 numpy
 spectral
 python-multipart
+httpx

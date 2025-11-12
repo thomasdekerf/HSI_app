@@ -2,7 +2,9 @@ from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hsi_loader import load_hsi, extract_rgb
-import cv2, os
+import numpy as np, cv2, tempfile, os
+import math
+
 from fastapi import Request
 
 app = FastAPI()
@@ -45,13 +47,50 @@ def get_rgb(r: int = 10, g: int = 20, b: int = 30):
 @app.post("/spectra")
 async def get_spectra(req: Request):
     if CUBE is None:
-        return {"error": "No cube loaded"}
+        return JSONResponse({"error": "No cube loaded"}, status_code=400)
     data = await req.json()
-    rect = data.get("rect")  # {x,y,width,height}
+    rect = data.get("rect")
     if rect is None:
-        return {"error": "No region"}
-    x0, y0 = int(rect["x"]), int(rect["y"])
-    w, h = int(rect["width"]), int(rect["height"])
-    roi = CUBE[y0:y0+h, x0:x0+w, :]
-    mean_spec = roi.mean(axis=(0,1)).tolist()
+        return JSONResponse({"error": "No region"}, status_code=400)
+
+    try:
+        x0 = float(rect["x0"])
+        y0 = float(rect["y0"])
+        x1 = float(rect["x1"])
+        y1 = float(rect["y1"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"error": "Invalid region"}, status_code=400)
+
+    height, width = CUBE.shape[:2]
+    is_normalized = bool(rect.get("normalized"))
+    if not is_normalized:
+        # auto-detect normalized coordinates if values are within [0, 1]
+        coords = [x0, x1, y0, y1]
+        if all(0 <= c <= 1 for c in coords):
+            is_normalized = True
+
+    if is_normalized:
+        x0 *= width
+        x1 *= width
+        y0 *= height
+        y1 *= height
+
+    x_start = math.floor(min(x0, x1))
+    x_end = math.ceil(max(x0, x1))
+    y_start = math.floor(min(y0, y1))
+    y_end = math.ceil(max(y0, y1))
+
+    x_start = max(0, min(width, x_start))
+    x_end = max(0, min(width, x_end))
+    y_start = max(0, min(height, y_start))
+    y_end = max(0, min(height, y_end))
+
+    if x_end <= x_start or y_end <= y_start:
+        return JSONResponse({"error": "Empty selection"}, status_code=400)
+
+    roi = CUBE[y_start:y_end, x_start:x_end, :]
+    if roi.size == 0:
+        return JSONResponse({"error": "Empty selection"}, status_code=400)
+
+    mean_spec = roi.mean(axis=(0, 1)).tolist()
     return {"spectra": mean_spec, "bands": BANDS}
