@@ -1,9 +1,10 @@
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hsi_loader import load_hsi, extract_rgb
 import numpy as np, cv2, tempfile, os
 import math
+
 from fastapi import Request
 
 app = FastAPI()
@@ -22,9 +23,17 @@ async def load_dataset(folder_path: str = Form(...)):
     global CUBE, BANDS
     if not os.path.exists(folder_path):
         return JSONResponse({"error": f"Path not found: {folder_path}"}, status_code=400)
-    CUBE = load_hsi(folder_path)
-    BANDS = np.linspace(400, 700, CUBE.shape[2]).tolist()
-    return {"bands": BANDS, "shape": CUBE.shape}
+    try:
+        CUBE, BANDS, metadata_warning = load_hsi(folder_path)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to load dataset: {exc}"}, status_code=500)
+
+    response = {"bands": BANDS, "shape": CUBE.shape}
+    if metadata_warning:
+        response["warning"] = metadata_warning
+    return response
 
 @app.get("/rgb")
 def get_rgb(r: int = 10, g: int = 20, b: int = 30):
