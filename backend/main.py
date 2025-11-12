@@ -1,9 +1,12 @@
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hsi_loader import load_hsi, extract_rgb
 import numpy as np, cv2, tempfile, os
 import math
+import shutil
+from pathlib import Path
+from typing import List, Optional
 
 from fastapi import Request
 
@@ -19,16 +22,47 @@ CUBE = None
 BANDS = None
 
 @app.post("/load")
-async def load_dataset(folder_path: str = Form(...)):
+async def load_dataset(
+    folder_path: Optional[str] = Form(None),
+    files: Optional[List[UploadFile]] = File(None),
+):
     global CUBE, BANDS
-    if not os.path.exists(folder_path):
-        return JSONResponse({"error": f"Path not found: {folder_path}"}, status_code=400)
+
+    temp_dir = None
+    load_target = None
+
     try:
-        CUBE, BANDS, metadata_warning = load_hsi(folder_path)
+        if files:
+            temp_dir = tempfile.mkdtemp(prefix="hsi_upload_")
+            for upload in files:
+                filename = upload.filename or "uploaded_file"
+                dest_path = Path(temp_dir) / filename
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                contents = await upload.read()
+                with open(dest_path, "wb") as out_file:
+                    out_file.write(contents)
+                await upload.close()
+            load_target = temp_dir
+        elif folder_path:
+            if not os.path.exists(folder_path):
+                return JSONResponse(
+                    {"error": f"Path not found: {folder_path}"}, status_code=400
+                )
+            load_target = folder_path
+        else:
+            return JSONResponse(
+                {"error": "No dataset provided. Select a folder or upload files."},
+                status_code=400,
+            )
+
+        CUBE, BANDS, metadata_warning = load_hsi(load_target)
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
         return JSONResponse({"error": f"Failed to load dataset: {exc}"}, status_code=500)
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     response = {"bands": BANDS, "shape": CUBE.shape}
     if metadata_warning:

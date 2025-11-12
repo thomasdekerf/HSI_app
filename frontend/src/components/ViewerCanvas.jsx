@@ -1,12 +1,33 @@
 import "konva/lib/shapes/Image";
-import React, { useRef, useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Stage, Layer, Rect, Image as KonvaImage } from "react-konva";
 
-export default function ViewerCanvas({ imageUrl, onRegion }) {
+function computeStageSize(image) {
+  if (!image) {
+    return {
+      width: 600,
+      height: 600,
+      scale: 1,
+    };
+  }
+
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 800;
+  const padding = 420; // leave space for controls/plots
+  const maxWidth = Math.max(500, viewportWidth - padding);
+  const maxHeight = Math.max(400, viewportHeight - 160);
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  return {
+    width: image.width * scale,
+    height: image.height * scale,
+    scale,
+  };
+}
+
+export default function ViewerCanvas({ imageUrl, regions = [], onRegion }) {
   const [rect, setRect] = useState(null);
   const [drawing, setDrawing] = useState(false);
   const [img, setImg] = useState(null);
-  const stageRef = useRef();
   const [stageSize, setStageSize] = useState({ width: 600, height: 600 });
   const [displayScale, setDisplayScale] = useState(1);
 
@@ -15,17 +36,23 @@ export default function ViewerCanvas({ imageUrl, onRegion }) {
     const image = new window.Image();
     image.src = imageUrl;
     image.onload = () => {
-      const maxStage = 600;
-      const scale = Math.min(
-        maxStage / image.width,
-        maxStage / image.height,
-        1
-      );
-      setStageSize({ width: image.width * scale, height: image.height * scale });
+      const { width, height, scale } = computeStageSize(image);
+      setStageSize({ width, height });
       setDisplayScale(scale);
       setImg(image);
     };
   }, [imageUrl]);
+
+  useEffect(() => {
+    if (!img) return;
+    const handleResize = () => {
+      const { width, height, scale } = computeStageSize(img);
+      setStageSize({ width, height });
+      setDisplayScale(scale);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [img]);
 
   const handleMouseDown = (e) => {
     const stage = e.target.getStage();
@@ -73,6 +100,7 @@ export default function ViewerCanvas({ imageUrl, onRegion }) {
     if (clamped.x0 === clamped.x1 || clamped.y0 === clamped.y1) return;
 
     onRegion(clamped);
+    setRect(null);
   };
 
   const displayRect = rect
@@ -84,11 +112,40 @@ export default function ViewerCanvas({ imageUrl, onRegion }) {
       }
     : null;
 
+  const drawnRegions = Array.isArray(regions)
+    ? regions
+        .map((region) => {
+          const rectData = region.rect || region;
+          if (
+            rectData == null ||
+            typeof rectData.x0 !== "number" ||
+            typeof rectData.y0 !== "number" ||
+            typeof rectData.x1 !== "number" ||
+            typeof rectData.y1 !== "number"
+          ) {
+            return null;
+          }
+          const x = Math.min(rectData.x0, rectData.x1) * displayScale;
+          const y = Math.min(rectData.y0, rectData.y1) * displayScale;
+          const width = Math.abs(rectData.x1 - rectData.x0) * displayScale;
+          const height = Math.abs(rectData.y1 - rectData.y0) * displayScale;
+          if (width <= 0 || height <= 0) return null;
+          return {
+            id: region.id || `${rectData.x0}-${rectData.y0}`,
+            x,
+            y,
+            width,
+            height,
+            color: region.color || "#ff3b30",
+          };
+        })
+        .filter(Boolean)
+    : [];
+
   return (
     <Stage
       width={stageSize.width}
       height={stageSize.height}
-      ref={stageRef}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -102,6 +159,17 @@ export default function ViewerCanvas({ imageUrl, onRegion }) {
             height={stageSize.height}
           />
         )}
+        {drawnRegions.map((region) => (
+          <Rect
+            key={region.id}
+            x={region.x}
+            y={region.y}
+            width={region.width}
+            height={region.height}
+            stroke={region.color}
+            strokeWidth={2}
+          />
+        ))}
         {displayRect && (
           <Rect
             x={displayRect.x}
