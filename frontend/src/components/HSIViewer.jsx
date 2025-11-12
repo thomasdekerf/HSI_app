@@ -25,7 +25,11 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
       body: JSON.stringify({ rect }),
     });
     const data = await res.json();
-    if (data.spectra) setSpectra(data.spectra);
+    if (data.spectra) {
+      setSpectra(data.spectra);
+    } else {
+      setSpectra(null);
+    }
   };
 
   const imageUrl = rgb ? `data:image/jpeg;base64,${hexToBase64(rgb)}` : null;
