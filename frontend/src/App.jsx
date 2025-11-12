@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import DropZone from "./components/DropZone";
 import HSIViewer from "./components/HSIViewer";
 import AnalysisPanel from "./components/AnalysisPanel";
+import SupervisedPanel from "./components/SupervisedPanel";
 import { getRGB } from "./api";
 
 const TARGET_WAVELENGTHS = [460, 550, 640];
@@ -72,6 +73,7 @@ export default function App() {
             {[
               { id: "viewer", label: "Visualization" },
               { id: "analysis", label: "Unsupervised Analysis" },
+              { id: "supervised", label: "Supervised Classification" },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -93,6 +95,14 @@ export default function App() {
           </div>
           {activeTab === "analysis" ? (
             <AnalysisPanel bands={bands} cubeShape={cubeShape} />
+          ) : activeTab === "supervised" ? (
+            <SupervisedPanel
+              bands={bands}
+              rgb={rgb}
+              idxs={idxs}
+              onChange={setIdxs}
+              cubeShape={cubeShape}
+            />
           ) : (
             <HSIViewer bands={bands} rgb={rgb} idxs={idxs} onChange={setIdxs} />
           )}
