@@ -6,7 +6,8 @@ import numpy as np, cv2, tempfile, os
 import math
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+import re
 
 from fastapi import Request
 
@@ -172,6 +173,195 @@ def _compute_kmeans_segmentation(cube: np.ndarray, n_clusters: int):
         "colors": palette.tolist(),
     }
 
+
+def _normalize_rect(
+    rect: dict, width: int, height: int
+) -> Tuple[int, int, int, int]:
+    try:
+        x0 = float(rect["x0"])
+        y0 = float(rect["y0"])
+        x1 = float(rect["x1"])
+        y1 = float(rect["y1"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Invalid region") from exc
+
+    is_normalized = bool(rect.get("normalized"))
+    coords = [x0, x1, y0, y1]
+    if not is_normalized and all(0.0 <= c <= 1.0 for c in coords):
+        is_normalized = True
+
+    if is_normalized:
+        x0 *= width
+        x1 *= width
+        y0 *= height
+        y1 *= height
+
+    x_start = math.floor(min(x0, x1))
+    x_end = math.ceil(max(x0, x1))
+    y_start = math.floor(min(y0, y1))
+    y_end = math.ceil(max(y0, y1))
+
+    x_start = max(0, min(width, x_start))
+    x_end = max(0, min(width, x_end))
+    y_start = max(0, min(height, y_start))
+    y_end = max(0, min(height, y_end))
+
+    if x_end <= x_start or y_end <= y_start:
+        raise ValueError("Empty selection")
+
+    return x_start, x_end, y_start, y_end
+
+
+def _extract_region_pixels(
+    cube: np.ndarray, rect: dict
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    height, width = cube.shape[:2]
+    x_start, x_end, y_start, y_end = _normalize_rect(rect, width, height)
+    roi = cube[y_start:y_end, x_start:x_end, :]
+    if roi.size == 0:
+        raise ValueError("Empty selection")
+    pixels = roi.reshape(-1, cube.shape[2]).astype(np.float32)
+    return pixels, (x_start, x_end, y_start, y_end)
+
+
+def _parse_hex_color(color_value: Optional[str]) -> Optional[Tuple[int, int, int]]:
+    if not color_value or not isinstance(color_value, str):
+        return None
+    text = color_value.strip()
+    if text.startswith("#"):
+        text = text[1:]
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", text):
+        return None
+    try:
+        r = int(text[0:2], 16)
+        g = int(text[2:4], 16)
+        b = int(text[4:6], 16)
+    except ValueError:
+        return None
+    return int(r), int(g), int(b)
+
+
+def _rgb_tuple_to_hex(rgb: Tuple[int, int, int]) -> str:
+    r, g, b = rgb
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
+    if not annotations:
+        raise ValueError("Provide at least one annotated region.")
+
+    class_samples: Dict[str, Dict[str, object]] = {}
+    class_colors: Dict[str, Tuple[int, int, int]] = {}
+
+    for annotation in annotations:
+        label = str(annotation.get("label", "")).strip()
+        if not label:
+            raise ValueError("Every annotation must include a label.")
+        rect = annotation.get("rect")
+        if rect is None:
+            raise ValueError("Annotation is missing region coordinates.")
+
+        color = _parse_hex_color(annotation.get("color"))
+        if color and label not in class_colors:
+            class_colors[label] = color
+
+        pixels, _ = _extract_region_pixels(cube, rect)
+        if pixels.size == 0:
+            continue
+
+        entry = class_samples.setdefault(label, {"pixels": [], "count": 0})
+        entry["pixels"].append(pixels)
+        entry["count"] = int(entry["count"]) + int(pixels.shape[0])
+
+    if len(class_samples) < 2:
+        raise ValueError("Annotate at least two distinct classes to run classification.")
+
+    class_labels = list(class_samples.keys())
+    class_vectors = []
+    training_means: Dict[str, np.ndarray] = {}
+
+    for label in class_labels:
+        entry = class_samples[label]
+        pixels_list = entry.get("pixels", [])
+        if not pixels_list:
+            raise ValueError(f"No pixels found for class '{label}'.")
+        combined = np.concatenate(pixels_list, axis=0)
+        if combined.size == 0:
+            raise ValueError(f"Annotation for class '{label}' is empty.")
+        combined = np.nan_to_num(combined, nan=0.0, posinf=0.0, neginf=0.0)
+        mean_vector = combined.mean(axis=0)
+        norm = np.linalg.norm(mean_vector)
+        if not np.isfinite(norm) or norm <= 1e-12:
+            raise ValueError(
+                f"Training samples for class '{label}' lack spectral variation."
+            )
+        class_vectors.append(mean_vector)
+        training_means[label] = mean_vector
+
+    class_matrix = np.vstack(class_vectors).astype(np.float32)
+    class_matrix = np.nan_to_num(class_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+
+    height, width, channels = cube.shape
+    total_pixels = height * width
+    pixel_matrix = cube.reshape(-1, channels).astype(np.float32)
+    pixel_matrix = np.nan_to_num(pixel_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+
+    pixel_norm = np.linalg.norm(pixel_matrix, axis=1, keepdims=True)
+    class_norm = np.linalg.norm(class_matrix, axis=1, keepdims=True)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denom = pixel_norm * class_norm.T
+        cos_theta = np.divide(pixel_matrix @ class_matrix.T, denom, where=denom > 0)
+    cos_theta = np.clip(cos_theta, -1.0, 1.0, out=np.zeros_like(cos_theta))
+    angles = np.arccos(cos_theta)
+    labels = np.argmin(angles, axis=1)
+    label_image = labels.reshape(height, width)
+
+    palette = _generate_palette(len(class_labels))
+    color_list = []
+    for idx, label in enumerate(class_labels):
+        color = class_colors.get(label)
+        if color is None:
+            palette_color = palette[idx].tolist()
+            color = (int(palette_color[0]), int(palette_color[1]), int(palette_color[2]))
+        color_list.append(color)
+
+    color_array = np.array(color_list, dtype=np.uint8)
+    color_image = color_array[label_image]
+    encoded_map = _encode_rgb_image(color_image)
+
+    summaries = []
+    for idx, label in enumerate(class_labels):
+        mask = labels == idx
+        classified_count = int(mask.sum())
+        classified_mean = None
+        if classified_count > 0:
+            classified_mean = pixel_matrix[mask].mean(axis=0)
+            classified_mean = np.nan_to_num(classified_mean, nan=0.0).tolist()
+
+        summaries.append(
+            {
+                "label": label,
+                "color": _rgb_tuple_to_hex(tuple(color_list[idx])),
+                "training": {
+                    "pixels": int(class_samples[label]["count"]),
+                    "spectra": training_means[label].tolist(),
+                },
+                "classified": {
+                    "pixels": classified_count,
+                    "spectra": classified_mean,
+                },
+            }
+        )
+
+    return {
+        "method": "sam",
+        "map": encoded_map,
+        "classes": summaries,
+        "bands": BANDS,
+        "total_pixels": total_pixels,
+    }
+
 @app.post("/load")
 async def load_dataset(
     folder_path: Optional[str] = Form(None),
@@ -239,45 +429,14 @@ async def get_spectra(req: Request):
         return JSONResponse({"error": "No region"}, status_code=400)
 
     try:
-        x0 = float(rect["x0"])
-        y0 = float(rect["y0"])
-        x1 = float(rect["x1"])
-        y1 = float(rect["y1"])
-    except (KeyError, TypeError, ValueError):
-        return JSONResponse({"error": "Invalid region"}, status_code=400)
+        pixels, _ = _extract_region_pixels(CUBE, rect)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
-    height, width = CUBE.shape[:2]
-    is_normalized = bool(rect.get("normalized"))
-    if not is_normalized:
-        # auto-detect normalized coordinates if values are within [0, 1]
-        coords = [x0, x1, y0, y1]
-        if all(0 <= c <= 1 for c in coords):
-            is_normalized = True
-
-    if is_normalized:
-        x0 *= width
-        x1 *= width
-        y0 *= height
-        y1 *= height
-
-    x_start = math.floor(min(x0, x1))
-    x_end = math.ceil(max(x0, x1))
-    y_start = math.floor(min(y0, y1))
-    y_end = math.ceil(max(y0, y1))
-
-    x_start = max(0, min(width, x_start))
-    x_end = max(0, min(width, x_end))
-    y_start = max(0, min(height, y_start))
-    y_end = max(0, min(height, y_end))
-
-    if x_end <= x_start or y_end <= y_start:
+    if pixels.size == 0:
         return JSONResponse({"error": "Empty selection"}, status_code=400)
 
-    roi = CUBE[y_start:y_end, x_start:x_end, :]
-    if roi.size == 0:
-        return JSONResponse({"error": "Empty selection"}, status_code=400)
-
-    mean_spec = roi.mean(axis=(0, 1)).tolist()
+    mean_spec = pixels.mean(axis=0).tolist()
     return {"spectra": mean_spec, "bands": BANDS}
 
 
@@ -329,3 +488,38 @@ async def run_analysis(req: Request):
         {"error": f"Unsupported analysis method: {method or 'unknown'}"},
         status_code=400,
     )
+
+
+@app.post("/supervised")
+async def run_supervised(req: Request):
+    if CUBE is None:
+        return JSONResponse({"error": "No cube loaded"}, status_code=400)
+
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload"}, status_code=400)
+
+    method = str(payload.get("method", "sam")).strip().lower() or "sam"
+    annotations = payload.get("annotations")
+    if not isinstance(annotations, list) or not annotations:
+        return JSONResponse(
+            {"error": "Provide at least one annotated region."}, status_code=400
+        )
+
+    if method not in {"sam", "spectral-angle", "spectral_angle_mapper"}:
+        return JSONResponse(
+            {"error": f"Unsupported supervised method: {method}"}, status_code=400
+        )
+
+    try:
+        result = _classify_with_sam(CUBE, annotations)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse(
+            {"error": f"Failed to run supervised classification: {exc}"},
+            status_code=500,
+        )
+
+    return result

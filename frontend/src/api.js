@@ -20,3 +20,20 @@ export async function runAnalysis(method, params = {}) {
   }
   return data;
 }
+
+export async function runSupervisedClassification(payload) {
+  const body = {
+    method: payload?.method || "sam",
+    annotations: payload?.annotations || [],
+  };
+  const res = await fetch(`${API}/supervised`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  return data;
+}
