@@ -2,7 +2,7 @@ import "konva/lib/shapes/Image";
 import React, { useState, useEffect } from "react";
 import { Stage, Layer, Rect, Image as KonvaImage } from "react-konva";
 
-function computeStageSize(image) {
+function computeStageSize(image, constraints = {}) {
   if (!image) {
     return {
       width: 600,
@@ -13,9 +13,16 @@ function computeStageSize(image) {
 
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1200;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 800;
-  const padding = 420; // leave space for controls/plots
-  const maxWidth = Math.max(500, viewportWidth - padding);
-  const maxHeight = Math.max(400, viewportHeight - 160);
+  const widthLimit =
+    typeof constraints.maxWidth === "number" && constraints.maxWidth > 0
+      ? constraints.maxWidth
+      : viewportWidth - 80;
+  const heightLimit =
+    typeof constraints.maxHeight === "number" && constraints.maxHeight > 0
+      ? constraints.maxHeight
+      : viewportHeight - 220;
+  const maxWidth = Math.max(320, widthLimit);
+  const maxHeight = Math.max(320, heightLimit);
   const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
   return {
     width: image.width * scale,
@@ -24,7 +31,7 @@ function computeStageSize(image) {
   };
 }
 
-export default function ViewerCanvas({ imageUrl, regions = [], onRegion }) {
+export default function ViewerCanvas({ imageUrl, regions = [], onRegion, maxWidth }) {
   const [rect, setRect] = useState(null);
   const [drawing, setDrawing] = useState(false);
   const [img, setImg] = useState(null);
@@ -32,27 +39,31 @@ export default function ViewerCanvas({ imageUrl, regions = [], onRegion }) {
   const [displayScale, setDisplayScale] = useState(1);
 
   useEffect(() => {
-    if (!imageUrl) return;
+    if (!imageUrl) {
+      setImg(null);
+      return;
+    }
     const image = new window.Image();
     image.src = imageUrl;
     image.onload = () => {
-      const { width, height, scale } = computeStageSize(image);
-      setStageSize({ width, height });
-      setDisplayScale(scale);
       setImg(image);
     };
   }, [imageUrl]);
 
   useEffect(() => {
-    if (!img) return;
-    const handleResize = () => {
-      const { width, height, scale } = computeStageSize(img);
+    if (!img) return undefined;
+    const updateSize = () => {
+      const { width, height, scale } = computeStageSize(img, { maxWidth });
       setStageSize({ width, height });
       setDisplayScale(scale);
     };
+    updateSize();
+    const handleResize = () => {
+      updateSize();
+    };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [img]);
+  }, [img, maxWidth]);
 
   const handleMouseDown = (e) => {
     const stage = e.target.getStage();
