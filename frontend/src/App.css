@@ -65,7 +65,8 @@
 }
 
 .app-shell {
-  width: min(1280px, 100%);
+  width: 100%;
+  max-width: 1600px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -98,6 +99,61 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.dropzone__canvas {
+  border-radius: var(--border-radius-lg);
+  border: 2px dashed rgba(0, 122, 255, 0.4);
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.06), rgba(0, 0, 0, 0));
+  padding: 32px;
+  min-height: 280px;
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  justify-content: center;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.dropzone__canvas.is-active {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.12), rgba(255, 255, 255, 0));
+  box-shadow: 0 20px 50px rgba(0, 122, 255, 0.15);
+}
+
+.dropzone__canvas-art {
+  flex-shrink: 0;
+}
+
+.dropzone__canvas-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dropzone__canvas-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.dropzone__canvas-subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.dropzone__canvas-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.dropzone__file-count {
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .dropzone__actions {
@@ -275,7 +331,7 @@
 .viewer-panel {
   display: grid;
   gap: 24px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
   align-items: start;
 }
 
@@ -283,6 +339,13 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  align-items: stretch;
+}
+
+.viewer-panel__stage {
+  width: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 .viewer-panel__controls {
@@ -300,6 +363,18 @@
   border: 1px solid rgba(11, 31, 58, 0.15) !important;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.6);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .band-sliders {
@@ -741,5 +816,10 @@
   .field-group.inline {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .dropzone__canvas {
+    flex-direction: column;
+    text-align: center;
   }
 }

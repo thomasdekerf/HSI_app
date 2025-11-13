@@ -31,11 +31,25 @@ function formatBandLabel(band) {
 export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   const [selections, setSelections] = useState([]);
   const colorIndexRef = useRef(0);
+  const stageContainerRef = useRef(null);
+  const [stageWidth, setStageWidth] = useState(0);
 
   useEffect(() => {
     setSelections([]);
     colorIndexRef.current = 0;
   }, [bands]);
+
+  useEffect(() => {
+    if (!stageContainerRef.current) return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setStageWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(stageContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const handle = (i, val) => {
     const newIdx = [...idxs];
@@ -103,7 +117,14 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   return (
     <div className="viewer-panel">
       <div className="viewer-panel__canvas">
-        <ViewerCanvas imageUrl={imageUrl} regions={regions} onRegion={handleRegion} />
+        <div className="viewer-panel__stage" ref={stageContainerRef}>
+          <ViewerCanvas
+            imageUrl={imageUrl}
+            regions={regions}
+            onRegion={handleRegion}
+            maxWidth={stageWidth}
+          />
+        </div>
         <div className="viewer-panel__controls">
           {selections.length > 0 && (
             <button
