@@ -3,20 +3,6 @@ import { runAnalysis } from "../api";
 import { hexToBase64 } from "../utils/image";
 import AnalysisImageViewer from "./AnalysisImageViewer";
 
-const sectionStyle = {
-  border: "1px solid #d0d0d0",
-  borderRadius: 8,
-  padding: 16,
-  marginBottom: 20,
-  backgroundColor: "#fafafa",
-};
-
-const labelStyle = {
-  display: "block",
-  fontWeight: 600,
-  marginBottom: 6,
-};
-
 function formatPercentage(value) {
   if (!Number.isFinite(value)) return "-";
   return `${value.toFixed(2)}%`;
@@ -122,212 +108,160 @@ export default function AnalysisPanel({ bands, cubeShape }) {
 
   if (!datasetReady) {
     return (
-      <div style={{ marginTop: 20 }}>
+      <div className="card analysis-empty">
         Load a hyperspectral dataset to enable unsupervised analysis.
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 24,
-        alignItems: "flex-start",
-      }}
-    >
-      <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 420 }}>
+    <div className="analysis-layout">
+      <div className="analysis-sidebar">
         {cubeShape && cubeShape.length === 3 && (
-          <div style={{ marginBottom: 16, color: "#555" }}>
-            <strong>Dataset shape:</strong> {cubeShape[0]} × {cubeShape[1]} × {cubeShape[2]} (height × width × bands)
+          <div className="analysis-sidebar__meta">
+            <span className="meta-label">Dataset shape</span>
+            <span className="meta-value">
+              {cubeShape[0]} × {cubeShape[1]} × {cubeShape[2]}
+            </span>
+            <span className="meta-hint">height × width × bands</span>
           </div>
         )}
 
-        <div style={sectionStyle}>
-          <h3 style={{ marginTop: 0 }}>Principal Component Analysis (PCA)</h3>
-          <p style={{ color: "#555" }}>
-            Compute the leading principal components to inspect the dominant spectral
-            patterns in the cube. Each component is normalized independently for
-            visualization.
+        <section className="card analysis-section">
+          <h3 className="card__title">Principal Component Analysis</h3>
+          <p className="card__subtitle">
+            Extract dominant spectral trends and explore their spatial expression across the
+            scene.
           </p>
-          <label htmlFor="pca-components" style={labelStyle}>
-            Number of components (1 – 6)
-          </label>
-          <input
-            id="pca-components"
-            type="number"
-            min={1}
-            max={Math.max(1, Math.min(10, bandCount))}
-            value={pcaCount}
-            onChange={(e) => setPcaCount(e.target.value)}
-            style={{ width: 120 }}
-            disabled={pcaLoading}
-          />
-          <div style={{ marginTop: 10 }}>
-            <button type="button" onClick={handleRunPCA} disabled={pcaLoading}>
-              {pcaLoading ? "Computing..." : "Run PCA"}
-            </button>
+          <div className="field-group inline">
+            <label className="field-label" htmlFor="pca-components">
+              Components (1 – 6)
+            </label>
+            <input
+              id="pca-components"
+              type="number"
+              min={1}
+              max={Math.max(1, Math.min(10, bandCount))}
+              value={pcaCount}
+              onChange={(e) => setPcaCount(e.target.value)}
+              className="field-input field-input--compact"
+              disabled={pcaLoading}
+            />
           </div>
-          {pcaError && (
-            <div style={{ marginTop: 10, color: "#b00020" }}>{pcaError}</div>
-          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleRunPCA}
+            disabled={pcaLoading}
+          >
+            {pcaLoading ? "Computing…" : "Run PCA"}
+          </button>
+          {pcaError && <div className="form-error">{pcaError}</div>}
           {pcaResult?.components?.length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-                {pcaResult.components.map((component) => (
-                  <div
-                    key={component.index}
-                    style={{
-                      width: 220,
-                      border: "1px solid #ccc",
-                      borderRadius: 8,
-                      padding: 10,
-                      backgroundColor: "#fff",
-                    }}
+            <div className="thumbnail-grid">
+              {pcaResult.components.map((component) => (
+                <article key={component.index} className="thumbnail-card">
+                  <header className="thumbnail-card__header">
+                    <span className="thumbnail-card__title">PC {component.index + 1}</span>
+                    <span className="thumbnail-card__meta">
+                      {formatPercentage(component.variance * 100)} variance
+                    </span>
+                  </header>
+                  <img
+                    src={`data:image/png;base64,${hexToBase64(component.image)}`}
+                    alt={`Principal Component ${component.index + 1}`}
+                    className="thumbnail-card__image"
+                  />
+                  <button
+                    type="button"
+                    className={`btn btn-ghost${
+                      selectedView === `pca-${component.index}` ? " is-active" : ""
+                    }`}
+                    onClick={() => setSelectedView(`pca-${component.index}`)}
                   >
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                      PC {component.index + 1}
-                    </div>
-                    <img
-                      src={`data:image/png;base64,${hexToBase64(component.image)}`}
-                      alt={`Principal Component ${component.index + 1}`}
-                      style={{ width: "100%", borderRadius: 4 }}
-                    />
-                    <div style={{ marginTop: 8, fontSize: 13, color: "#555" }}>
-                      Explained variance: {formatPercentage(component.variance * 100)}
-                    </div>
-                    <div style={{ marginTop: 10 }}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedView(`pca-${component.index}`)}
-                        style={{
-                          width: "100%",
-                          padding: "6px 8px",
-                          borderRadius: 6,
-                          border: selectedView === `pca-${component.index}` ? "1px solid #268bd2" : "1px solid #ccc",
-                          backgroundColor:
-                            selectedView === `pca-${component.index}` ? "#268bd2" : "#f7f7f7",
-                          color: selectedView === `pca-${component.index}` ? "white" : "#333",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {selectedView === `pca-${component.index}` ? "Viewing" : "View large"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    {selectedView === `pca-${component.index}` ? "Viewing" : "View large"}
+                  </button>
+                </article>
+              ))}
             </div>
           )}
-        </div>
+        </section>
 
-        <div style={sectionStyle}>
-          <h3 style={{ marginTop: 0 }}>K-Means Spectral Clustering</h3>
-          <p style={{ color: "#555" }}>
-            Partition pixels into clusters based on spectral similarity to highlight
-            regions with comparable reflectance signatures.
+        <section className="card analysis-section">
+          <h3 className="card__title">K-means spectral clustering</h3>
+          <p className="card__subtitle">
+            Segment the scene into materials with comparable reflectance signatures for rapid
+            interpretation.
           </p>
-          <label htmlFor="kmeans-clusters" style={labelStyle}>
-            Number of clusters (2 – 15)
-          </label>
-          <input
-            id="kmeans-clusters"
-            type="number"
-            min={2}
-            max={15}
-            value={clusterCount}
-            onChange={(e) => setClusterCount(e.target.value)}
-            style={{ width: 120 }}
-            disabled={kmeansLoading}
-          />
-          <div style={{ marginTop: 10 }}>
-            <button type="button" onClick={handleRunKMeans} disabled={kmeansLoading}>
-              {kmeansLoading ? "Clustering..." : "Run K-Means"}
-            </button>
+          <div className="field-group inline">
+            <label className="field-label" htmlFor="kmeans-clusters">
+              Clusters (2 – 15)
+            </label>
+            <input
+              id="kmeans-clusters"
+              type="number"
+              min={2}
+              max={15}
+              value={clusterCount}
+              onChange={(e) => setClusterCount(e.target.value)}
+              className="field-input field-input--compact"
+              disabled={kmeansLoading}
+            />
           </div>
-          {kmeansError && (
-            <div style={{ marginTop: 10, color: "#b00020" }}>{kmeansError}</div>
-          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleRunKMeans}
+            disabled={kmeansLoading}
+          >
+            {kmeansLoading ? "Clustering…" : "Run clustering"}
+          </button>
+          {kmeansError && <div className="form-error">{kmeansError}</div>}
           {kmeansResult?.map && (
-            <div style={{ marginTop: 16 }}>
-              <div
-                style={{
-                  border: "1px solid #ccc",
-                  borderRadius: 8,
-                  padding: 12,
-                  backgroundColor: "#fff",
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Cluster map</div>
+            <div className="cluster-results">
+              <div className="thumbnail-card">
+                <header className="thumbnail-card__header">
+                  <span className="thumbnail-card__title">Cluster map</span>
+                  {Array.isArray(kmeansResult.cluster_summaries) && (
+                    <span className="thumbnail-card__meta">
+                      {kmeansResult.cluster_summaries.length} clusters
+                    </span>
+                  )}
+                </header>
                 <img
                   src={`data:image/png;base64,${hexToBase64(kmeansResult.map)}`}
                   alt="K-means cluster map"
-                  style={{ width: "100%", borderRadius: 4 }}
+                  className="thumbnail-card__image"
                 />
-                <div style={{ marginTop: 10 }}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedView("kmeans-map")}
-                    style={{
-                      width: "100%",
-                      padding: "6px 8px",
-                      borderRadius: 6,
-                      border: selectedView === "kmeans-map" ? "1px solid #268bd2" : "1px solid #ccc",
-                      backgroundColor: selectedView === "kmeans-map" ? "#268bd2" : "#f7f7f7",
-                      color: selectedView === "kmeans-map" ? "white" : "#333",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {selectedView === "kmeans-map" ? "Viewing" : "View large"}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className={`btn btn-ghost${selectedView === "kmeans-map" ? " is-active" : ""}`}
+                  onClick={() => setSelectedView("kmeans-map")}
+                >
+                  {selectedView === "kmeans-map" ? "Viewing" : "View large"}
+                </button>
               </div>
               {Array.isArray(kmeansResult.cluster_summaries) && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Cluster summary</div>
-                  <table
-                    style={{
-                      width: "100%",
-                      borderCollapse: "collapse",
-                      fontSize: 14,
-                    }}
-                  >
+                <div className="cluster-summary">
+                  <div className="cluster-summary__title">Cluster summary</div>
+                  <table className="cluster-summary__table">
                     <thead>
-                      <tr style={{ backgroundColor: "#efefef" }}>
-                        <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                          Cluster
-                        </th>
-                        <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                          Pixels
-                        </th>
-                        <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                          Share
-                        </th>
-                        <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                          Mean reflectance
-                        </th>
-                        <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                          Peak band
-                        </th>
+                      <tr>
+                        <th>Cluster</th>
+                        <th>Pixels</th>
+                        <th>Share</th>
+                        <th>Mean reflectance</th>
+                        <th>Peak band</th>
                       </tr>
                     </thead>
                     <tbody>
                       {kmeansResult.cluster_summaries.map((summary) => (
                         <tr key={summary.cluster}>
-                          <td style={{ padding: 6, border: "1px solid #ddd" }}>
-                            {summary.cluster}
-                          </td>
-                          <td style={{ padding: 6, border: "1px solid #ddd" }}>
-                            {summary.count}
-                          </td>
-                          <td style={{ padding: 6, border: "1px solid #ddd" }}>
-                            {formatPercentage(summary.percentage)}
-                          </td>
-                          <td style={{ padding: 6, border: "1px solid #ddd" }}>
-                            {formatNumber(summary.mean)}
-                          </td>
-                          <td style={{ padding: 6, border: "1px solid #ddd" }}>
+                          <td>{summary.cluster}</td>
+                          <td>{summary.count}</td>
+                          <td>{formatPercentage(summary.percentage)}</td>
+                          <td>{formatNumber(summary.mean)}</td>
+                          <td>
                             {summary.peak_wavelength !== undefined && summary.peak_wavelength !== null
                               ? `${formatNumber(summary.peak_wavelength, 1)} nm`
                               : `Band ${summary.peak_band_index}`}
@@ -340,9 +274,9 @@ export default function AnalysisPanel({ bands, cubeShape }) {
               )}
             </div>
           )}
-        </div>
+        </section>
       </div>
-      <div style={{ flex: "1 1 480px", minWidth: 360 }}>
+      <div className="analysis-viewer card">
         <AnalysisImageViewer
           visuals={availableVisuals}
           selectedId={selectedView}

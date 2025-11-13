@@ -149,7 +149,7 @@ export default function ViewerCanvas({ imageUrl, regions = [], onRegion }) {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      style={{ border: "1px solid #ccc", borderRadius: 10 }}
+      className="viewer-stage"
     >
       <Layer>
         {img && (
