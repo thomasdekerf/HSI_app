@@ -27,38 +27,37 @@ export default function ClassSpectraPlot({ title, bands, series }) {
   }, [numericBands, series]);
 
   if (!traces.length) {
-    return (
-      <div
-        style={{
-          border: "1px solid #e0e0e0",
-          borderRadius: 8,
-          padding: 16,
-          backgroundColor: "#fafafa",
-          color: "#666",
-        }}
-      >
-        No spectra available yet.
-      </div>
-    );
+    return <div className="spectra-card spectra-card--empty">No spectra available yet.</div>;
   }
 
   return (
-    <Plot
-      data={traces}
-      layout={{
-        title,
-        autosize: true,
-        height: 340,
-        margin: { t: 50, r: 20, l: 60, b: 60 },
-        xaxis: { title: "Wavelength (nm)" },
-        yaxis: { title: "Reflectance" },
-        legend: { orientation: "h", y: -0.2 },
-        paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: "rgba(0,0,0,0)",
-      }}
-      style={{ width: "100%", height: "100%" }}
-      useResizeHandler
-      config={{ displaylogo: false, responsive: true }}
-    />
+    <div className="spectra-card">
+      <Plot
+        data={traces}
+        layout={{
+          title,
+          autosize: true,
+          height: 340,
+          margin: { t: 50, r: 24, l: 64, b: 64 },
+          xaxis: {
+            title: "Wavelength (nm)",
+            gridcolor: "rgba(12, 29, 54, 0.1)",
+            zeroline: false,
+          },
+          yaxis: {
+            title: "Reflectance",
+            gridcolor: "rgba(12, 29, 54, 0.1)",
+            zeroline: false,
+          },
+          legend: { orientation: "h", y: -0.2 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+          font: { family: "SF Pro Display, 'Segoe UI', sans-serif", color: "#0b1f3a" },
+        }}
+        style={{ width: "100%", height: "100%" }}
+        useResizeHandler
+        config={{ displaylogo: false, responsive: true }}
+      />
+    </div>
   );
 }

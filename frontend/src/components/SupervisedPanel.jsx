@@ -45,15 +45,6 @@ function describeBand(bands, index) {
   return String(value);
 }
 
-const sectionStyle = {
-  border: "1px solid #d0d0d0",
-  borderRadius: 10,
-  padding: 18,
-  backgroundColor: "#fefefe",
-  marginBottom: 20,
-  boxShadow: "0 4px 16px rgba(0, 0, 0, 0.04)",
-};
-
 export default function SupervisedPanel({
   bands,
   rgb,
@@ -268,97 +259,53 @@ export default function SupervisedPanel({
   }, [classification]);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 24,
-        alignItems: "flex-start",
-      }}
-    >
-      <div style={{ flex: "1 1 420px", minWidth: 360, maxWidth: 460 }}>
-        <div style={sectionStyle}>
-          <h3 style={{ marginTop: 0 }}>Annotate training regions</h3>
-          <p style={{ color: "#555", marginBottom: 16 }}>
-            Add labeled classes, select one, and drag on the image to capture
-            representative spectral signatures. Each class should include at
-            least one region before running classification.
+    <div className="supervised-layout">
+      <div className="supervised-column">
+        <section className="card supervised-section">
+          <h3 className="card__title">Annotate training regions</h3>
+          <p className="card__subtitle">
+            Add labeled classes, select one, and drag on the image to capture representative
+            spectral signatures. Each class should include at least one region before running
+            classification.
           </p>
 
-          <form
-            onSubmit={handleAddClass}
-            style={{ display: "flex", gap: 8, marginBottom: 12 }}
-          >
+          <form onSubmit={handleAddClass} className="class-form">
             <input
               type="text"
               value={newClassName}
               onChange={(event) => setNewClassName(event.target.value)}
               placeholder="New class name"
-              style={{ flex: "1 1 auto", padding: "6px 10px" }}
+              className="field-input"
             />
-            <button type="submit">Add class</button>
+            <button type="submit" className="btn btn-primary">
+              Add class
+            </button>
           </form>
-          {formError && (
-            <div style={{ color: "#b00020", marginBottom: 10 }}>{formError}</div>
-          )}
+          {formError && <div className="form-error">{formError}</div>}
 
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              marginBottom: 16,
-            }}
-          >
+          <div className="class-chips">
             {classes.length === 0 && (
-              <div style={{ color: "#777" }}>Create classes to begin annotating.</div>
+              <div className="muted-text">Create classes to begin annotating.</div>
             )}
             {classes.map((cls) => {
               const count = regionCountByClass.get(cls.id) || 0;
               const isActive = cls.id === activeClassId;
               return (
-                <div
-                  key={cls.id}
-                  style={{ display: "flex", alignItems: "center", gap: 4 }}
-                >
+                <div key={cls.id} className="class-chip">
                   <button
                     type="button"
+                    className={`class-chip__button${isActive ? " is-active" : ""}`}
                     onClick={() => setActiveClassId(cls.id)}
-                    style={{
-                      padding: "6px 12px",
-                      borderRadius: 20,
-                      border: isActive ? "2px solid #005fb8" : "1px solid #ccc",
-                      backgroundColor: isActive ? "#e8f4ff" : "#fff",
-                      color: "#333",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
                   >
-                    <span
-                      style={{
-                        width: 12,
-                        height: 12,
-                        borderRadius: "50%",
-                        backgroundColor: cls.color,
-                        display: "inline-block",
-                      }}
-                    />
+                    <span className="class-chip__swatch" style={{ backgroundColor: cls.color }} />
                     <span>{cls.name}</span>
-                    <span style={{ fontSize: 12, color: "#666" }}>({count})</span>
+                    <span className="class-chip__count">({count})</span>
                   </button>
                   <button
                     type="button"
+                    className="class-chip__remove"
                     onClick={() => handleRemoveClass(cls.id)}
                     title={`Remove ${cls.name}`}
-                    style={{
-                      border: "none",
-                      background: "transparent",
-                      color: "#999",
-                      cursor: "pointer",
-                      fontSize: 16,
-                      lineHeight: 1,
-                    }}
                   >
                     ×
                   </button>
@@ -367,31 +314,27 @@ export default function SupervisedPanel({
             })}
           </div>
 
-          <div style={{ marginBottom: 12 }}>
+          <div className="viewer-wrapper">
             <ViewerCanvas imageUrl={imageUrl} regions={displayRegions} onRegion={handleRegion} />
             {!imageUrl && (
-              <div style={{ marginTop: 8, color: "#777" }}>
+              <div className="muted-text">
                 Load a dataset and adjust the bands to annotate regions.
               </div>
             )}
-            {annotationMessage && (
-              <div style={{ marginTop: 8, color: "#b58900" }}>{annotationMessage}</div>
-            )}
+            {annotationMessage && <div className="notice notice--warning">{annotationMessage}</div>}
           </div>
 
           {regions.length > 0 && (
-            <div style={{ display: "flex", gap: 10 }}>
-              <button type="button" onClick={handleClearRegions}>
-                Clear regions
-              </button>
-            </div>
+            <button type="button" className="btn btn-ghost" onClick={handleClearRegions}>
+              Clear regions
+            </button>
           )}
 
-          <div style={{ marginTop: 16 }}>
+          <div className="band-sliders">
             {["R", "G", "B"].map((channel, index) => (
-              <div key={channel} style={{ marginBottom: 12 }}>
-                <label style={{ display: "block", marginBottom: 4 }}>
-                  {channel}-band: {describeBand(bands, idxs[index] ?? index)}
+              <div key={channel} className="band-sliders__item">
+                <label className="band-sliders__label">
+                  {channel}-band <span>{describeBand(bands, idxs[index] ?? index)}</span>
                 </label>
                 <input
                   type="range"
@@ -399,36 +342,24 @@ export default function SupervisedPanel({
                   max={Math.max(0, bands.length - 1)}
                   value={idxs[index] || 0}
                   onChange={(event) => handleBandChange(index, event.target.value)}
-                  style={{ width: "100%" }}
+                  className="band-slider"
                 />
               </div>
             ))}
           </div>
-        </div>
+        </section>
 
         {regions.length > 0 && (
-          <div style={sectionStyle}>
-            <h4 style={{ marginTop: 0 }}>Annotated regions</h4>
-            <div style={{ maxHeight: 220, overflow: "auto" }}>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: 13,
-                }}
-              >
+          <section className="card supervised-section">
+            <h4 className="card__title">Annotated regions</h4>
+            <div className="table-scroll">
+              <table className="data-table">
                 <thead>
-                  <tr style={{ backgroundColor: "#f1f1f1" }}>
-                    <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                      Class
-                    </th>
-                    <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                      Width × Height
-                    </th>
-                    <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                      Pixels
-                    </th>
-                    <th style={{ padding: 6, border: "1px solid #ddd" }}>Actions</th>
+                  <tr>
+                    <th>Class</th>
+                    <th>Width × Height</th>
+                    <th>Pixels</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -437,33 +368,27 @@ export default function SupervisedPanel({
                     const pixels = calculatePixelCount(region.rect);
                     return (
                       <tr key={region.id}>
-                        <td style={{ padding: 6, border: "1px solid #eee" }}>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 6,
-                            }}
-                          >
+                        <td>
+                          <span className="table-chip">
                             <span
-                              style={{
-                                width: 10,
-                                height: 10,
-                                borderRadius: "50%",
-                                backgroundColor: cls?.color || "#ff3b30",
-                                display: "inline-block",
-                              }}
+                              className="table-chip__swatch"
+                              style={{ backgroundColor: cls?.color || "#ff3b30" }}
                             />
                             {cls ? cls.name : "Removed class"}
                           </span>
                         </td>
-                        <td style={{ padding: 6, border: "1px solid #eee" }}>
-                          {Math.abs(Math.round(region.rect.x1 - region.rect.x0))} ×{" "}
-                          {Math.abs(Math.round(region.rect.y1 - region.rect.y0))}
+                        <td>
+                          {Math.abs(Math.round(region.rect.x1 - region.rect.x0))} × {Math.abs(
+                            Math.round(region.rect.y1 - region.rect.y0),
+                          )}
                         </td>
-                        <td style={{ padding: 6, border: "1px solid #eee" }}>{pixels}</td>
-                        <td style={{ padding: 6, border: "1px solid #eee", textAlign: "center" }}>
-                          <button type="button" onClick={() => handleRemoveRegion(region.id)}>
+                        <td>{pixels}</td>
+                        <td className="data-table__actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={() => handleRemoveRegion(region.id)}
+                          >
                             Remove
                           </button>
                         </td>
@@ -473,187 +398,116 @@ export default function SupervisedPanel({
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         )}
       </div>
 
-      <div style={{ flex: "1 1 520px", minWidth: 420 }}>
-        <div style={sectionStyle}>
-          <h3 style={{ marginTop: 0 }}>Spectral Angle Mapper classification</h3>
-          <p style={{ color: "#555" }}>
-            Run SAM to assign each pixel to the class with the most similar
-            spectral angle. The resulting map and spectra summaries update once
-            the classification finishes.
+      <div className="supervised-column">
+        <section className="card supervised-section">
+          <h3 className="card__title">Spectral Angle Mapper classification</h3>
+          <p className="card__subtitle">
+            Run SAM to assign each pixel to the class with the most similar spectral angle. The
+            resulting map and spectra summaries update once the classification finishes.
           </p>
-          <button type="button" onClick={handleClassify} disabled={!canClassify || loading}>
-            {loading ? "Classifying..." : "Run classification"}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleClassify}
+            disabled={!canClassify || loading}
+          >
+            {loading ? "Classifying…" : "Run classification"}
           </button>
           {!canClassify && annotations.length > 0 && (
-            <div style={{ color: "#b58900", marginTop: 8 }}>
+            <div className="notice notice--warning">
               Annotate at least two classes before running the classifier.
             </div>
           )}
-          {error && (
-            <div style={{ color: "#b00020", marginTop: 10 }}>{error}</div>
-          )}
+          {error && <div className="form-error">{error}</div>}
 
           {classification && (
-            <div style={{ marginTop: 20 }}>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 16,
-                }}
-              >
-                {classificationImage && (
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                      Classification map
-                    </div>
-                    <img
-                      src={classificationImage}
-                      alt="SAM classification map"
-                      style={{
-                        width: "100%",
-                        borderRadius: 10,
-                        border: "1px solid #ddd",
-                      }}
-                    />
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        flexWrap: "wrap",
-                        marginTop: 10,
-                      }}
-                    >
-                      {classification.classes?.map((cls) => (
-                        <div
-                          key={cls.label}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 6,
-                            padding: "4px 8px",
-                            borderRadius: 14,
-                            backgroundColor: "#f5f5f5",
-                            border: "1px solid #e0e0e0",
-                            fontSize: 13,
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 12,
-                              height: 12,
-                              borderRadius: "50%",
-                              backgroundColor: cls.color,
-                              display: "inline-block",
-                            }}
-                          />
-                          {cls.label}
-                        </div>
-                      ))}
-                    </div>
+            <div className="classification-results">
+              {classificationImage && (
+                <div className="classification-map">
+                  <div className="classification-map__header">
+                    <span>Classification map</span>
+                    {classification.classes?.length > 0 && (
+                      <div className="legend-chips">
+                        {classification.classes.map((cls) => (
+                          <span key={cls.label} className="legend-chip">
+                            <span
+                              className="legend-chip__swatch"
+                              style={{ backgroundColor: cls.color }}
+                            />
+                            {cls.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <img src={classificationImage} alt="SAM classification map" />
+                </div>
+              )}
+
+              <div className="classification-summary">
+                <div className="classification-summary__title">Summary</div>
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Class</th>
+                        <th>Training pixels</th>
+                        <th>Classified pixels</th>
+                        <th>Classified share</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {classification.classes?.map((cls) => {
+                        const classifiedPixels = cls.classified?.pixels || 0;
+                        const share =
+                          totalPixels && totalPixels > 0
+                            ? ((classifiedPixels / totalPixels) * 100).toFixed(2)
+                            : "-";
+                        return (
+                          <tr key={cls.label}>
+                            <td>
+                              <span className="table-chip">
+                                <span
+                                  className="table-chip__swatch"
+                                  style={{ backgroundColor: cls.color }}
+                                />
+                                {cls.label}
+                              </span>
+                            </td>
+                            <td>{cls.training?.pixels ?? 0}</td>
+                            <td>{classifiedPixels}</td>
+                            <td>{share === "-" ? "-" : `${share}%`}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {totalTrainingPixels !== null && totalTrainingPixels !== undefined && (
+                  <div className="muted-text">
+                    Annotated pixels: {totalTrainingPixels}
+                    {totalPixels ? ` • Scene pixels: ${totalPixels}` : ""}
                   </div>
                 )}
-
-                <div>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Summary</div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table
-                      style={{
-                        width: "100%",
-                        borderCollapse: "collapse",
-                        fontSize: 13,
-                      }}
-                    >
-                      <thead>
-                        <tr style={{ backgroundColor: "#f1f1f1" }}>
-                          <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                            Class
-                          </th>
-                          <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                            Training pixels
-                          </th>
-                          <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                            Classified pixels
-                          </th>
-                          <th style={{ textAlign: "left", padding: 6, border: "1px solid #ddd" }}>
-                            Classified share
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {classification.classes?.map((cls) => {
-                          const classifiedPixels = cls.classified?.pixels || 0;
-                          const share =
-                            totalPixels && totalPixels > 0
-                              ? ((classifiedPixels / totalPixels) * 100).toFixed(2)
-                              : "-";
-                          return (
-                            <tr key={cls.label}>
-                              <td style={{ padding: 6, border: "1px solid #eee" }}>
-                                <span
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: 6,
-                                  }}
-                                >
-                                  <span
-                                    style={{
-                                      width: 10,
-                                      height: 10,
-                                      borderRadius: "50%",
-                                      backgroundColor: cls.color,
-                                      display: "inline-block",
-                                    }}
-                                  />
-                                  {cls.label}
-                                </span>
-                              </td>
-                              <td style={{ padding: 6, border: "1px solid #eee" }}>
-                                {cls.training?.pixels ?? 0}
-                              </td>
-                              <td style={{ padding: 6, border: "1px solid #eee" }}>
-                                {classifiedPixels}
-                              </td>
-                              <td style={{ padding: 6, border: "1px solid #eee" }}>
-                                {share === "-" ? "-" : `${share}%`}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {totalTrainingPixels !== null && totalTrainingPixels !== undefined && (
-                    <div style={{ marginTop: 8, color: "#666" }}>
-                      Annotated pixels: {totalTrainingPixels}
-                      {totalPixels ? ` • Scene pixels: ${totalPixels}` : ""}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <ClassSpectraPlot
-                    title="Average spectra of annotated classes"
-                    bands={classification.bands || bands}
-                    series={trainingSeries}
-                  />
-                </div>
-                <div>
-                  <ClassSpectraPlot
-                    title="Average spectra of classified pixels"
-                    bands={classification.bands || bands}
-                    series={classifiedSeries}
-                  />
-                </div>
               </div>
+
+              <ClassSpectraPlot
+                title="Average spectra of annotated classes"
+                bands={classification.bands || bands}
+                series={trainingSeries}
+              />
+              <ClassSpectraPlot
+                title="Average spectra of classified pixels"
+                bands={classification.bands || bands}
+                series={classifiedSeries}
+              />
             </div>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );

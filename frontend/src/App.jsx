@@ -4,6 +4,7 @@ import HSIViewer from "./components/HSIViewer";
 import AnalysisPanel from "./components/AnalysisPanel";
 import SupervisedPanel from "./components/SupervisedPanel";
 import { getRGB } from "./api";
+import "./App.css";
 
 const TARGET_WAVELENGTHS = [460, 550, 640];
 
@@ -60,54 +61,57 @@ export default function App() {
     }
   }, [idxs, bands]);
 
+  const tabs = [
+    { id: "viewer", label: "Visualization" },
+    { id: "analysis", label: "Unsupervised Analysis" },
+    { id: "supervised", label: "Supervised Classification" },
+  ];
+
   return (
-    <div style={{ padding: 20 }}>
-      <h2>HSI Viewer</h2>
-      <DropZone onLoaded={handleLoaded} />
-      {warning && (
-        <div style={{ marginTop: 10, color: "#b58900" }}>{warning}</div>
-      )}
-      {bands.length > 0 && (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-            {[
-              { id: "viewer", label: "Visualization" },
-              { id: "analysis", label: "Unsupervised Analysis" },
-              { id: "supervised", label: "Supervised Classification" },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: 6,
-                  border: "1px solid #268bd2",
-                  backgroundColor: activeTab === tab.id ? "#268bd2" : "white",
-                  color: activeTab === tab.id ? "white" : "#268bd2",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          {activeTab === "analysis" ? (
-            <AnalysisPanel bands={bands} cubeShape={cubeShape} />
-          ) : activeTab === "supervised" ? (
-            <SupervisedPanel
-              bands={bands}
-              rgb={rgb}
-              idxs={idxs}
-              onChange={setIdxs}
-              cubeShape={cubeShape}
-            />
-          ) : (
-            <HSIViewer bands={bands} rgb={rgb} idxs={idxs} onChange={setIdxs} />
-          )}
-        </div>
-      )}
+    <div className="app-root">
+      <header className="app-hero">
+        <div className="app-hero__badge">HSI Studio</div>
+        <h1 className="app-hero__title">Hyperspectral exploration made effortless</h1>
+        <p className="app-hero__subtitle">
+          Upload a cube or provide a dataset path to unlock rich visualizations, spectral
+          analysis, and classification workflows in an intuitive workspace.
+        </p>
+      </header>
+      <main className="app-shell">
+        <DropZone onLoaded={handleLoaded} />
+        {warning && <div className="warning-banner">{warning}</div>}
+        {bands.length > 0 && (
+          <section className="interactive-area">
+            <nav className="tab-bar" aria-label="Primary views">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`tab-button${activeTab === tab.id ? " is-active" : ""}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+            <div className="panel-surface">
+              {activeTab === "analysis" ? (
+                <AnalysisPanel bands={bands} cubeShape={cubeShape} />
+              ) : activeTab === "supervised" ? (
+                <SupervisedPanel
+                  bands={bands}
+                  rgb={rgb}
+                  idxs={idxs}
+                  onChange={setIdxs}
+                  cubeShape={cubeShape}
+                />
+              ) : (
+                <HSIViewer bands={bands} rgb={rgb} idxs={idxs} onChange={setIdxs} />
+              )}
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 }

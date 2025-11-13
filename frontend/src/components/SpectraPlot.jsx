@@ -20,17 +20,34 @@ export default function SpectraPlot({ bands, selections }) {
 
   if (traces.length === 0) return null;
   return (
-    <Plot
-      data={traces}
-      layout={{
-        width: 480,
-        height: 360,
-        title: "Mean spectra",
-        xaxis: { title: "Wavelength (nm)" },
-        yaxis: { title: "Reflectance" },
-        legend: { orientation: "h" },
-        margin: { t: 40, r: 20, l: 60, b: 60 },
-      }}
-    />
+    <div className="spectra-plot-card card">
+      <div className="card__title">Spectral signatures</div>
+      <Plot
+        data={traces}
+        layout={{
+          title: "Mean spectra",
+          autosize: true,
+          margin: { t: 40, r: 24, l: 56, b: 56 },
+          paper_bgcolor: "rgba(255,255,255,0)",
+          plot_bgcolor: "rgba(255,255,255,0)",
+          font: { family: "'SF Pro Display', 'Segoe UI', sans-serif", color: "#0b172a" },
+          xaxis: {
+            title: "Wavelength (nm)",
+            gridcolor: "rgba(12,29,54,0.08)",
+            zeroline: false,
+          },
+          yaxis: {
+            title: "Reflectance",
+            gridcolor: "rgba(12,29,54,0.08)",
+            zeroline: false,
+          },
+          legend: { orientation: "h", x: 0, y: 1.1 },
+        }}
+        config={{ displaylogo: false, responsive: true }}
+        useResizeHandler
+        className="spectra-plot"
+        style={{ width: "100%", height: "100%" }}
+      />
+    </div>
   );
 }

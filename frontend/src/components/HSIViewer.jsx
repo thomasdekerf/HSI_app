@@ -101,33 +101,41 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   const regions = selections.map((sel) => ({ id: sel.id, rect: sel.rect, color: sel.color }));
 
   return (
-    <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-      <div>
+    <div className="viewer-panel">
+      <div className="viewer-panel__canvas">
         <ViewerCanvas imageUrl={imageUrl} regions={regions} onRegion={handleRegion} />
-        {selections.length > 0 && (
-          <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
-            <button type="button" onClick={handleClearSelections}>
+        <div className="viewer-panel__controls">
+          {selections.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={handleClearSelections}
+            >
               Clear selections
             </button>
+          )}
+          <div className="band-sliders">
+            {["R", "G", "B"].map((ch, i) => (
+              <div key={ch} className="band-sliders__item">
+                <label className="band-sliders__label">
+                  {ch}-band <span>{formatBandLabel(bands[idxs[i]])}</span>
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={bands.length - 1}
+                  value={idxs[i]}
+                  onChange={(e) => handle(i, e.target.value)}
+                  className="band-slider"
+                />
+              </div>
+            ))}
           </div>
-        )}
-        {["R", "G", "B"].map((ch, i) => (
-          <div key={ch} style={{ marginTop: 10 }}>
-            <label>
-              {ch}-band: {formatBandLabel(bands[idxs[i]])}
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={bands.length - 1}
-              value={idxs[i]}
-              onChange={(e) => handle(i, e.target.value)}
-              style={{ width: "100%" }}
-            />
-          </div>
-        ))}
+        </div>
       </div>
-      <SpectraPlot bands={bands} selections={selections} />
+      <div className="viewer-panel__plot">
+        <SpectraPlot bands={bands} selections={selections} />
+      </div>
     </div>
   );
 }
