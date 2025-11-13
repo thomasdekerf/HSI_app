@@ -5,11 +5,21 @@ from typing import Iterable, List, Optional
 
 import spectral.io.envi as envi
 
+def _iter_hdr_files(folder: Path):
+    """Yield header files in ``folder`` ignoring the case of the extension."""
+
+    for file_path in folder.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() == ".hdr":
+            yield file_path
+
+
 def find_file(folder: Path, keyword: str):
     """Return the first file that contains keyword and ends with .hdr"""
-    for f in folder.glob("*.hdr"):
-        if keyword.lower() in f.name.lower():
-            return f
+
+    keyword_lower = keyword.lower()
+    for file_path in _iter_hdr_files(folder):
+        if keyword_lower in file_path.name.lower():
+            return file_path
     return None
 
 def _parse_wavelengths(values: Optional[Iterable]) -> Optional[List[float]]:
@@ -70,7 +80,7 @@ def load_hsi(input_path: str):
     data_hdr  = None
 
     # choose data file (first hdr that is not ref)
-    hdrs = list(folder.glob("*.hdr"))
+    hdrs = list(_iter_hdr_files(folder))
     for f in hdrs:
         if "darkref" not in f.name.lower() and "whiteref" not in f.name.lower():
             data_hdr = f
