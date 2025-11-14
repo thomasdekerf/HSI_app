@@ -7,6 +7,64 @@ function normalizeFiles(fileList) {
   }));
 }
 
+function normalizeLocalPath(rawValue) {
+  if (!rawValue) return null;
+  let normalized = rawValue.trim();
+  if (!normalized) return null;
+
+  if (/^file:/i.test(normalized)) {
+    normalized = normalized.replace(/^file:\/\//i, "");
+    if (/^\/[A-Za-z]:/.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch (error) {
+      // Ignore decoding errors and fall back to the raw value
+    }
+  }
+
+  if (/^[A-Za-z]:/.test(normalized)) {
+    return normalized.replace(/\//g, "\\");
+  }
+
+  if (normalized.startsWith("/")) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function getDroppedFolderPath(dataTransfer) {
+  if (!dataTransfer || typeof dataTransfer.getData !== "function") {
+    return null;
+  }
+
+  const extractCandidate = (raw) => {
+    if (!raw) return null;
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    if (lines.length === 0) return null;
+    return lines[0];
+  };
+
+  const uriCandidate = extractCandidate(dataTransfer.getData("text/uri-list"));
+  const uriPath = normalizeLocalPath(uriCandidate);
+  if (uriPath) {
+    return uriPath;
+  }
+
+  const textCandidate = extractCandidate(dataTransfer.getData("text/plain"));
+  const textPath = normalizeLocalPath(textCandidate);
+  if (textPath) {
+    return textPath;
+  }
+
+  return null;
+}
+
 async function extractFilesFromDataTransfer(dataTransfer) {
   if (!dataTransfer) return [];
 
@@ -140,6 +198,14 @@ export default function DropZone({ onLoaded }) {
   const handleDrop = async (event) => {
     event.preventDefault();
     setIsDragActive(false);
+    const folderPath = getDroppedFolderPath(event.dataTransfer);
+    if (folderPath) {
+      setPath(folderPath);
+      setFiles([]);
+      handleLoad([], folderPath);
+      return;
+    }
+
     const dropped = await extractFilesFromDataTransfer(event.dataTransfer);
     if (dropped.length > 0) {
       setFiles(dropped);
