@@ -3,6 +3,7 @@ import ViewerCanvas from "./ViewerCanvas";
 import ClassSpectraPlot from "./ClassSpectraPlot";
 import { runSupervisedClassification } from "../api";
 import { hexToBase64 } from "../utils/image";
+import { describeShape, estimateShapePixels } from "../utils/shapes";
 
 const CLASS_COLORS = [
   "#ff3b30",
@@ -21,13 +22,6 @@ const CLASS_COLORS = [
 
 function createRegionId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function calculatePixelCount(rect) {
-  if (!rect) return 0;
-  const width = Math.max(0, Math.abs(Math.round(rect.x1) - Math.round(rect.x0)));
-  const height = Math.max(0, Math.abs(Math.round(rect.y1) - Math.round(rect.y0)));
-  return width * height;
 }
 
 function describeBand(bands, index) {
@@ -61,6 +55,7 @@ export default function SupervisedPanel({
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [annotationMessage, setAnnotationMessage] = useState("");
+  const [drawMode, setDrawMode] = useState("rectangle");
   const colorIndexRef = useRef(0);
 
   useEffect(() => {
@@ -72,6 +67,7 @@ export default function SupervisedPanel({
     setFormError("");
     colorIndexRef.current = 0;
     setAnnotationMessage("");
+    setDrawMode("rectangle");
   }, [bands]);
 
   const classMap = useMemo(() => {
@@ -127,7 +123,10 @@ export default function SupervisedPanel({
     setClassification(null);
   };
 
-  const handleRegion = (rect) => {
+  const handleRegion = (shapeData) => {
+    if (!shapeData?.shape || !shapeData?.bounds) {
+      return;
+    }
     const selectedClass = classMap.get(activeClassId);
     if (!selectedClass) {
       setAnnotationMessage("Select a class before drawing a region.");
@@ -137,7 +136,8 @@ export default function SupervisedPanel({
     const region = {
       id: createRegionId(),
       classId: selectedClass.id,
-      rect,
+      shape: shapeData.shape,
+      bounds: shapeData.bounds,
     };
 
     setRegions((prev) => [...prev, region]);
@@ -173,7 +173,8 @@ export default function SupervisedPanel({
           if (!cls) return null;
           return {
             label: cls.name,
-            rect: region.rect,
+            rect: region.bounds,
+            shape: region.shape,
             color: cls.color,
           };
         })
@@ -212,7 +213,7 @@ export default function SupervisedPanel({
         const cls = classMap.get(region.classId);
         return {
           id: region.id,
-          rect: region.rect,
+          shape: region.shape || { type: "rectangle", ...region.bounds },
           color: cls ? cls.color : "#ff3b30",
         };
       }),
@@ -230,6 +231,7 @@ export default function SupervisedPanel({
       label: cls.label,
       color: cls.color,
       spectra: cls.training?.spectra || null,
+      stddev: cls.training?.std || null,
     }));
   }, [classification]);
 
@@ -239,6 +241,7 @@ export default function SupervisedPanel({
       label: cls.label,
       color: cls.color,
       spectra: cls.classified?.spectra || null,
+      stddev: cls.classified?.std || null,
     }));
   }, [classification]);
 
@@ -315,7 +318,42 @@ export default function SupervisedPanel({
           </div>
 
           <div className="viewer-wrapper">
-            <ViewerCanvas imageUrl={imageUrl} regions={displayRegions} onRegion={handleRegion} />
+            <div className="annotation-tools">
+              <span className="annotation-tools__label">Annotation shape</span>
+              <div className="annotation-tools__options">
+                {[
+                  { id: "rectangle", label: "Rectangle" },
+                  { id: "circle", label: "Circle" },
+                  { id: "point", label: "Point" },
+                  { id: "polygon", label: "Polygon" },
+                ].map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`annotation-tools__button${drawMode === option.id ? " is-active" : ""}`}
+                    onClick={() => setDrawMode(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              {drawMode === "circle" && (
+                <div className="annotation-tools__hint">
+                  Click where you want the center and drag outward to set the radius.
+                </div>
+              )}
+              {drawMode === "polygon" && (
+                <div className="annotation-tools__hint">
+                  Click to add vertices and double-click to close the polygon.
+                </div>
+              )}
+            </div>
+            <ViewerCanvas
+              imageUrl={imageUrl}
+              regions={displayRegions}
+              onRegion={handleRegion}
+              drawMode={drawMode}
+            />
             {!imageUrl && (
               <div className="muted-text">
                 Load a dataset and adjust the bands to annotate regions.
@@ -357,7 +395,7 @@ export default function SupervisedPanel({
                 <thead>
                   <tr>
                     <th>Class</th>
-                    <th>Width × Height</th>
+                    <th>Shape details</th>
                     <th>Pixels</th>
                     <th>Actions</th>
                   </tr>
@@ -365,7 +403,7 @@ export default function SupervisedPanel({
                 <tbody>
                   {regions.map((region) => {
                     const cls = classMap.get(region.classId);
-                    const pixels = calculatePixelCount(region.rect);
+                    const pixels = estimateShapePixels(region.shape);
                     return (
                       <tr key={region.id}>
                         <td>
@@ -377,12 +415,8 @@ export default function SupervisedPanel({
                             {cls ? cls.name : "Removed class"}
                           </span>
                         </td>
-                        <td>
-                          {Math.abs(Math.round(region.rect.x1 - region.rect.x0))} × {Math.abs(
-                            Math.round(region.rect.y1 - region.rect.y0),
-                          )}
-                        </td>
-                        <td>{pixels}</td>
+                        <td>{describeShape(region.shape)}</td>
+                        <td>{Math.round(pixels)}</td>
                         <td className="data-table__actions">
                           <button
                             type="button"

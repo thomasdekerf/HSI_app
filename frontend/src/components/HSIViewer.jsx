@@ -33,10 +33,12 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   const colorIndexRef = useRef(0);
   const stageContainerRef = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
+  const [drawMode, setDrawMode] = useState("rectangle");
 
   useEffect(() => {
     setSelections([]);
     colorIndexRef.current = 0;
+    setDrawMode("rectangle");
   }, [bands]);
 
   useEffect(() => {
@@ -59,7 +61,10 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
     onChange(newIdx);
   };
 
-  const handleRegion = async (rect) => {
+  const handleRegion = async (shapeData) => {
+    if (!shapeData?.shape || !shapeData?.bounds) {
+      return;
+    }
     const selectionId = `${Date.now()}-${Math.random()}`;
     const color = REGION_COLORS[colorIndexRef.current % REGION_COLORS.length];
     colorIndexRef.current += 1;
@@ -68,10 +73,12 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
       ...prev,
       {
         id: selectionId,
-        rect,
+        shape: shapeData.shape,
+        bounds: shapeData.bounds,
         color,
         spectra: null,
         loading: true,
+        stddev: null,
       },
     ]);
 
@@ -79,14 +86,19 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
       const res = await fetch("http://127.0.0.1:8000/spectra", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rect }),
+        body: JSON.stringify({ rect: shapeData.bounds, shape: shapeData.shape }),
       });
       const data = await res.json();
       if (data.spectra) {
         setSelections((prev) =>
           prev.map((sel) =>
             sel.id === selectionId
-              ? { ...sel, spectra: data.spectra, loading: false }
+              ? {
+                  ...sel,
+                  spectra: data.spectra,
+                  stddev: data.stddev || null,
+                  loading: false,
+                }
               : sel
           )
         );
@@ -112,7 +124,11 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   };
 
   const imageUrl = rgb ? `data:image/jpeg;base64,${hexToBase64(rgb)}` : null;
-  const regions = selections.map((sel) => ({ id: sel.id, rect: sel.rect, color: sel.color }));
+  const regions = selections.map((sel) => ({
+    id: sel.id,
+    shape: sel.shape || { type: "rectangle", ...sel.bounds },
+    color: sel.color,
+  }));
 
   return (
     <div className="viewer-panel">
@@ -123,9 +139,40 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
             regions={regions}
             onRegion={handleRegion}
             maxWidth={stageWidth}
+            drawMode={drawMode}
           />
         </div>
         <div className="viewer-panel__controls">
+          <div className="annotation-tools">
+            <span className="annotation-tools__label">Annotation shape</span>
+            <div className="annotation-tools__options">
+              {[
+                { id: "rectangle", label: "Rectangle" },
+                { id: "circle", label: "Circle" },
+                { id: "point", label: "Point" },
+                { id: "polygon", label: "Polygon" },
+              ].map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`annotation-tools__button${drawMode === option.id ? " is-active" : ""}`}
+                  onClick={() => setDrawMode(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {drawMode === "circle" && (
+              <div className="annotation-tools__hint">
+                Click to set the center and drag outward to adjust the radius.
+              </div>
+            )}
+            {drawMode === "polygon" && (
+              <div className="annotation-tools__hint">
+                Click to add vertices and double-click to close the polygon.
+              </div>
+            )}
+          </div>
           {selections.length > 0 && (
             <button
               type="button"
