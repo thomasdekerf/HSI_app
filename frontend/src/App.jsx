@@ -6,8 +6,6 @@ import SupervisedPanel from "./components/SupervisedPanel";
 import { getRGB } from "./api";
 import "./App.css";
 
-const TARGET_WAVELENGTHS = [460, 550, 640];
-
 function normalizeBands(bands) {
   if (!Array.isArray(bands)) return [];
   return bands.map((band, idx) => {
@@ -22,18 +20,13 @@ function chooseInitialIndices(bands) {
     return Array.from({ length: 3 }, (_, i) => Math.min(i, bands.length - 1));
   }
 
-  return TARGET_WAVELENGTHS.map((target, idx) => {
-    let bestIndex = Math.min(idx * Math.floor(bands.length / 3), bands.length - 1);
-    let bestDiff = Infinity;
-    bands.forEach((band, bandIdx) => {
-      const diff = Math.abs(band - target);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestIndex = bandIdx;
-      }
-    });
-    return bestIndex;
-  });
+  const lastIndex = bands.length - 1;
+  const pickByPercentile = (fraction) => {
+    const rawIndex = Math.round(lastIndex * fraction);
+    return Math.max(0, Math.min(lastIndex, rawIndex));
+  };
+
+  return [pickByPercentile(0.25), pickByPercentile(0.5), pickByPercentile(0.75)];
 }
 
 export default function App() {
@@ -71,11 +64,7 @@ export default function App() {
     <div className="app-root">
       <header className="app-hero">
         <div className="app-hero__badge">HSI Studio</div>
-        <h1 className="app-hero__title">Hyperspectral exploration made effortless</h1>
-        <p className="app-hero__subtitle">
-          Upload a cube or provide a dataset path to unlock rich visualizations, spectral
-          analysis, and classification workflows in an intuitive workspace.
-        </p>
+        <h1 className="app-hero__title">InViLab HSI analysis App</h1>
       </header>
       <main className="app-shell">
         <DropZone onLoaded={handleLoaded} />
