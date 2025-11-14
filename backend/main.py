@@ -177,6 +177,8 @@ def _compute_kmeans_segmentation(cube: np.ndarray, n_clusters: int):
 def _normalize_rect(
     rect: dict, width: int, height: int
 ) -> Tuple[int, int, int, int]:
+    if rect is None:
+        raise ValueError("Invalid region")
     try:
         x0 = float(rect["x0"])
         y0 = float(rect["y0"])
@@ -212,7 +214,7 @@ def _normalize_rect(
     return x_start, x_end, y_start, y_end
 
 
-def _extract_region_pixels(
+def _extract_pixels_from_rect(
     cube: np.ndarray, rect: dict
 ) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
     height, width = cube.shape[:2]
@@ -222,6 +224,109 @@ def _extract_region_pixels(
         raise ValueError("Empty selection")
     pixels = roi.reshape(-1, cube.shape[2]).astype(np.float32)
     return pixels, (x_start, x_end, y_start, y_end)
+
+
+def _extract_pixels_from_shape(
+    cube: np.ndarray, shape: dict
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    if not isinstance(shape, dict):
+        raise ValueError("Invalid shape data")
+    shape_type = str(shape.get("type", "rectangle")).lower()
+    height, width = cube.shape[:2]
+    if shape_type == "rectangle":
+        rect = {
+            "x0": shape.get("x0"),
+            "x1": shape.get("x1"),
+            "y0": shape.get("y0"),
+            "y1": shape.get("y1"),
+            "normalized": shape.get("normalized"),
+        }
+        return _extract_pixels_from_rect(cube, rect)
+    if shape_type == "point":
+        x = shape.get("x", shape.get("cx"))
+        y = shape.get("y", shape.get("cy"))
+        if x is None or y is None:
+            raise ValueError("Invalid point coordinates")
+        x_idx = int(round(float(x)))
+        y_idx = int(round(float(y)))
+        x_idx = max(0, min(width - 1, x_idx))
+        y_idx = max(0, min(height - 1, y_idx))
+        roi = cube[y_idx : y_idx + 1, x_idx : x_idx + 1, :]
+        pixels = roi.reshape(-1, cube.shape[2]).astype(np.float32)
+        return pixels, (x_idx, x_idx + 1, y_idx, y_idx + 1)
+    if shape_type == "circle":
+        cx = shape.get("cx")
+        cy = shape.get("cy")
+        radius = shape.get("radius")
+        if None in (cx, cy, radius):
+            raise ValueError("Invalid circle definition")
+        cx = float(cx)
+        cy = float(cy)
+        radius = float(radius)
+        if radius <= 0:
+            raise ValueError("Circle radius must be positive")
+        x_start = max(0, math.floor(cx - radius))
+        x_end = min(width, math.ceil(cx + radius))
+        y_start = max(0, math.floor(cy - radius))
+        y_end = min(height, math.ceil(cy + radius))
+        if x_end <= x_start or y_end <= y_start:
+            raise ValueError("Empty selection")
+        yy = np.arange(y_start, y_end)[:, None]
+        xx = np.arange(x_start, x_end)[None, :]
+        mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+        roi = cube[y_start:y_end, x_start:x_end, :]
+        pixels = roi[mask]
+        if pixels.size == 0:
+            raise ValueError("Empty selection")
+        return pixels.reshape(-1, cube.shape[2]).astype(np.float32), (x_start, x_end, y_start, y_end)
+    if shape_type == "polygon":
+        points = shape.get("points")
+        if not isinstance(points, list) or len(points) < 3:
+            raise ValueError("Polygon requires at least three points")
+        coords = []
+        for point in points:
+            if isinstance(point, dict):
+                px = point.get("x")
+                py = point.get("y")
+            else:
+                px, py = point
+            if px is None or py is None:
+                continue
+            coords.append([float(px), float(py)])
+        if len(coords) < 3:
+            raise ValueError("Polygon requires at least three valid points")
+        arr = np.array(coords, dtype=np.float32)
+        x_start = max(0, math.floor(float(np.min(arr[:, 0]))))
+        x_end = min(width, math.ceil(float(np.max(arr[:, 0]))))
+        y_start = max(0, math.floor(float(np.min(arr[:, 1]))))
+        y_end = min(height, math.ceil(float(np.max(arr[:, 1]))))
+        if x_end <= x_start or y_end <= y_start:
+            raise ValueError("Empty selection")
+        local = arr.copy()
+        local[:, 0] -= x_start
+        local[:, 1] -= y_start
+        local = np.round(local).astype(np.int32)
+        mask = np.zeros((y_end - y_start, x_end - x_start), dtype=np.uint8)
+        cv2.fillPoly(mask, [local], 1)
+        roi = cube[y_start:y_end, x_start:x_end, :]
+        pixels = roi[mask.astype(bool)]
+        if pixels.size == 0:
+            raise ValueError("Empty selection")
+        return pixels.reshape(-1, cube.shape[2]).astype(np.float32), (x_start, x_end, y_start, y_end)
+    raise ValueError(f"Unsupported shape type: {shape_type}")
+
+
+def _extract_region_pixels(
+    cube: np.ndarray, region: dict
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    if isinstance(region, dict):
+        shape = region.get("shape")
+        rect = region.get("rect")
+        if shape:
+            return _extract_pixels_from_shape(cube, shape)
+        if rect:
+            return _extract_pixels_from_rect(cube, rect)
+    return _extract_pixels_from_rect(cube, region)
 
 
 def _parse_hex_color(color_value: Optional[str]) -> Optional[Tuple[int, int, int]]:
@@ -257,15 +362,14 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
         label = str(annotation.get("label", "")).strip()
         if not label:
             raise ValueError("Every annotation must include a label.")
-        rect = annotation.get("rect")
-        if rect is None:
+        if annotation.get("rect") is None and annotation.get("shape") is None:
             raise ValueError("Annotation is missing region coordinates.")
 
         color = _parse_hex_color(annotation.get("color"))
         if color and label not in class_colors:
             class_colors[label] = color
 
-        pixels, _ = _extract_region_pixels(cube, rect)
+        pixels, _ = _extract_region_pixels(cube, annotation)
         if pixels.size == 0:
             continue
 
@@ -279,6 +383,7 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
     class_labels = list(class_samples.keys())
     class_vectors = []
     training_means: Dict[str, np.ndarray] = {}
+    training_stds: Dict[str, np.ndarray] = {}
 
     for label in class_labels:
         entry = class_samples[label]
@@ -290,6 +395,7 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
             raise ValueError(f"Annotation for class '{label}' is empty.")
         combined = np.nan_to_num(combined, nan=0.0, posinf=0.0, neginf=0.0)
         mean_vector = combined.mean(axis=0)
+        std_vector = np.nan_to_num(combined.std(axis=0), nan=0.0, posinf=0.0, neginf=0.0)
         norm = np.linalg.norm(mean_vector)
         if not np.isfinite(norm) or norm <= 1e-12:
             raise ValueError(
@@ -297,6 +403,7 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
             )
         class_vectors.append(mean_vector)
         training_means[label] = mean_vector
+        training_stds[label] = std_vector
 
     class_matrix = np.vstack(class_vectors).astype(np.float32)
     class_matrix = np.nan_to_num(class_matrix, nan=0.0, posinf=0.0, neginf=0.0)
@@ -335,9 +442,13 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
         mask = labels == idx
         classified_count = int(mask.sum())
         classified_mean = None
+        classified_std = None
         if classified_count > 0:
-            classified_mean = pixel_matrix[mask].mean(axis=0)
+            classified_pixels = pixel_matrix[mask]
+            classified_mean = classified_pixels.mean(axis=0)
             classified_mean = np.nan_to_num(classified_mean, nan=0.0).tolist()
+            std_vector = np.nan_to_num(classified_pixels.std(axis=0), nan=0.0)
+            classified_std = std_vector.tolist()
 
         summaries.append(
             {
@@ -346,10 +457,12 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
                 "training": {
                     "pixels": int(class_samples[label]["count"]),
                     "spectra": training_means[label].tolist(),
+                    "std": training_stds[label].tolist(),
                 },
                 "classified": {
                     "pixels": classified_count,
                     "spectra": classified_mean,
+                    "std": classified_std,
                 },
             }
         )
@@ -424,20 +537,22 @@ async def get_spectra(req: Request):
     if CUBE is None:
         return JSONResponse({"error": "No cube loaded"}, status_code=400)
     data = await req.json()
-    rect = data.get("rect")
-    if rect is None:
+    region = {"rect": data.get("rect"), "shape": data.get("shape")}
+    if region["rect"] is None and region["shape"] is None:
         return JSONResponse({"error": "No region"}, status_code=400)
 
     try:
-        pixels, _ = _extract_region_pixels(CUBE, rect)
+        pixels, _ = _extract_region_pixels(CUBE, region)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     if pixels.size == 0:
         return JSONResponse({"error": "Empty selection"}, status_code=400)
 
+    pixels = np.nan_to_num(pixels, nan=0.0, posinf=0.0, neginf=0.0)
     mean_spec = pixels.mean(axis=0).tolist()
-    return {"spectra": mean_spec, "bands": BANDS}
+    std_spec = np.nan_to_num(pixels.std(axis=0), nan=0.0, posinf=0.0, neginf=0.0).tolist()
+    return {"spectra": mean_spec, "stddev": std_spec, "bands": BANDS}
 
 
 @app.post("/analysis")

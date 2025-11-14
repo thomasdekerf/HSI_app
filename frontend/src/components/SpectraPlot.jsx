@@ -1,33 +1,89 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
+import { hexToRgba } from "../utils/colors";
 
 export default function SpectraPlot({ bands, selections }) {
-  if (!Array.isArray(selections) || selections.length === 0) return null;
-  const numericBands = bands.map((band, idx) => {
-    const num = Number(band);
-    return Number.isFinite(num) ? num : idx;
-  });
-  const traces = selections
-    .map((sel, idx) => ({ sel, idx }))
-    .filter(({ sel }) => Array.isArray(sel.spectra))
-    .map(({ sel, idx }) => ({
-      x: numericBands,
-      y: sel.spectra,
-      mode: "lines",
-      line: { color: sel.color },
-      name: `Region ${idx + 1}`,
-    }));
+  const [showStdDev, setShowStdDev] = useState(false);
+  const numericBands = useMemo(() => {
+    if (Array.isArray(bands) && bands.length > 0) {
+      return bands.map((band, idx) => {
+        const num = Number(band);
+        return Number.isFinite(num) ? num : idx;
+      });
+    }
+    const fallback = (Array.isArray(selections)
+      ? selections.find((entry) => Array.isArray(entry?.spectra))?.spectra
+      : null) || [];
+    return fallback.map((_, idx) => idx);
+  }, [bands, selections]);
+
+  const traces = useMemo(() => {
+    if (!Array.isArray(selections)) return [];
+    const items = [];
+    selections
+      .map((sel, idx) => ({ sel, idx }))
+      .filter(({ sel }) => Array.isArray(sel.spectra))
+      .forEach(({ sel, idx }) => {
+        const label = sel.label || `Region ${idx + 1}`;
+        const hasStd =
+          showStdDev &&
+          Array.isArray(sel.stddev) &&
+          sel.stddev.length === sel.spectra.length &&
+          sel.stddev.length === numericBands.length;
+        if (hasStd) {
+          const lower = sel.spectra.map((value, i) => value - (sel.stddev[i] || 0));
+          const upper = sel.spectra.map((value, i) => value + (sel.stddev[i] || 0));
+          items.push({
+            x: numericBands,
+            y: lower,
+            mode: "lines",
+            line: { width: 0 },
+            showlegend: false,
+            hoverinfo: "skip",
+            name: `${label} std lower`,
+          });
+          items.push({
+            x: numericBands,
+            y: upper,
+            mode: "lines",
+            line: { width: 0 },
+            fill: "tonexty",
+            fillcolor: hexToRgba(sel.color, 0.18),
+            showlegend: false,
+            hoverinfo: "skip",
+            name: `${label} std upper`,
+          });
+        }
+        items.push({
+          x: numericBands,
+          y: sel.spectra,
+          mode: "lines",
+          line: { color: sel.color, width: 3 },
+          name: label,
+        });
+      });
+    return items;
+  }, [numericBands, selections, showStdDev]);
 
   if (traces.length === 0) return null;
   return (
     <div className="spectra-plot-card card">
-      <div className="card__title">Spectral signatures</div>
+      <div className="spectra-plot-card__header">
+        <div className="card__title">Spectral signatures</div>
+        <label className="checkbox-toggle">
+          <input
+            type="checkbox"
+            checked={showStdDev}
+            onChange={() => setShowStdDev((prev) => !prev)}
+          />
+          <span>Show standard deviation</span>
+        </label>
+      </div>
       <Plot
         data={traces}
         layout={{
-          title: "Mean spectra",
           autosize: true,
-          margin: { t: 40, r: 24, l: 56, b: 56 },
+          margin: { t: 20, r: 24, l: 56, b: 56 },
           paper_bgcolor: "rgba(255,255,255,0)",
           plot_bgcolor: "rgba(255,255,255,0)",
           font: { family: "'SF Pro Display', 'Segoe UI', sans-serif", color: "#0b172a" },
@@ -41,7 +97,7 @@ export default function SpectraPlot({ bands, selections }) {
             gridcolor: "rgba(12,29,54,0.08)",
             zeroline: false,
           },
-          legend: { orientation: "h", x: 0, y: 1.1 },
+          legend: { orientation: "h", x: 0, y: 1.05 },
         }}
         config={{ displaylogo: false, responsive: true }}
         useResizeHandler
