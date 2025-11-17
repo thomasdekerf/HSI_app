@@ -36,8 +36,6 @@ export default function HSIViewer({ bands, rgb, idxs, onChange }) {
   const [drawMode, setDrawMode] = useState("rectangle");
 
   useEffect(() => {
-    setSelections([]);
-    colorIndexRef.current = 0;
     setDrawMode("rectangle");
   }, [bands]);
 

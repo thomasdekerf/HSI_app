@@ -1,20 +1,14 @@
 import React, { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { hexToRgba } from "../utils/colors";
-
-function sanitizeBands(bands) {
-  if (!Array.isArray(bands) || bands.length === 0) {
-    return [];
-  }
-  return bands.map((band, index) => {
-    const numeric = Number(band);
-    return Number.isFinite(numeric) ? numeric : index;
-  });
-}
+import { exportSpectraCsv, toNumericBands } from "../utils/export";
 
 export default function ClassSpectraPlot({ title, bands, series }) {
   const [showStdDev, setShowStdDev] = useState(false);
-  const numericBands = useMemo(() => sanitizeBands(bands), [bands]);
+  const numericBands = useMemo(
+    () => toNumericBands(bands, series?.[0]?.spectra?.length || 0),
+    [bands, series],
+  );
   const traces = useMemo(() => {
     if (!Array.isArray(series)) return [];
     const items = [];
@@ -65,18 +59,36 @@ export default function ClassSpectraPlot({ title, bands, series }) {
     return <div className="spectra-card spectra-card--empty">No spectra available yet.</div>;
   }
 
+  const handleExport = () => {
+    const exportableSeries = (Array.isArray(series) ? series : []).map((entry, idx) => ({
+      ...entry,
+      label: entry.label || `Series ${idx + 1}`,
+    }));
+    exportSpectraCsv(`${title.toLowerCase().replace(/\s+/g, "-")}.csv`, numericBands, exportableSeries);
+  };
+
   return (
     <div className="spectra-card">
       <div className="spectra-plot-card__header">
         <div className="card__title">{title}</div>
-        <label className="checkbox-toggle">
-          <input
-            type="checkbox"
-            checked={showStdDev}
-            onChange={() => setShowStdDev((prev) => !prev)}
-          />
-          <span>Show standard deviation</span>
-        </label>
+        <div className="spectra-plot-card__actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleExport}
+            disabled={traces.length === 0}
+          >
+            Export CSV
+          </button>
+          <label className="checkbox-toggle">
+            <input
+              type="checkbox"
+              checked={showStdDev}
+              onChange={() => setShowStdDev((prev) => !prev)}
+            />
+            <span>Show standard deviation</span>
+          </label>
+        </div>
       </div>
       <Plot
         data={traces}

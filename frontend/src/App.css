@@ -454,6 +454,12 @@
   gap: 12px;
 }
 
+.spectra-plot-card__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .checkbox-toggle {
   display: inline-flex;
   align-items: center;
