@@ -509,7 +509,7 @@ async def load_dataset(
                 status_code=400,
             )
 
-        CUBE, BANDS, metadata_warning = load_hsi(load_target)
+        CUBE, BANDS, warning_text = load_hsi(load_target)
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
@@ -519,8 +519,8 @@ async def load_dataset(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     response = {"bands": BANDS, "shape": CUBE.shape}
-    if metadata_warning:
-        response["warning"] = metadata_warning
+    if warning_text:
+        response["warning"] = warning_text
     return response
 
 @app.get("/rgb")
