@@ -63,6 +63,35 @@ def _extract_wavelengths(metadata: Optional[dict]) -> Optional[List[float]]:
     return None
 
 
+def _normalize_uncalibrated_data(data: np.ndarray) -> np.ndarray:
+    """Scale raw data to ``[0, 1]`` when calibration references are missing.
+
+    Without calibration the raw values can be arbitrarily large, which would be
+    clipped to white by downstream RGB extraction.  This function rescales the
+    cube using the finite global min/max to preserve contrast while keeping the
+    output compatible with the rest of the pipeline.
+    """
+
+    array = np.asarray(data, dtype=np.float32)
+
+    if array.size == 0:
+        return np.zeros_like(array, dtype=np.float32)
+
+    finite_mask = np.isfinite(array)
+    if not np.any(finite_mask):
+        return np.zeros_like(array, dtype=np.float32)
+
+    finite_values = array[finite_mask]
+    min_val = float(np.min(finite_values))
+    max_val = float(np.max(finite_values))
+
+    if max_val - min_val < 1e-9:
+        return np.zeros_like(array, dtype=np.float32)
+
+    scaled = (array - min_val) / (max_val - min_val)
+    return np.clip(scaled, 0.0, 1.0, out=np.empty_like(array))
+
+
 def load_hsi(input_path: str):
     """
     Auto-load HSI dataset (data + dark + white refs).
@@ -115,11 +144,11 @@ def load_hsi(input_path: str):
             missing_parts.append("WHITEREF")
 
         calibration_warning = (
-            f"Calibration reference files missing ({', '.join(missing_parts)}); returning uncorrected data."
+            f"Calibration reference files missing ({', '.join(missing_parts)}); returning normalized uncorrected data."
         )
         warnings_list.append(calibration_warning)
         warnings.warn(calibration_warning)
-        corrected = data_ref
+        corrected = _normalize_uncalibrated_data(data_ref)
 
     if wavelengths is None or len(wavelengths) != corrected.shape[2]:
         metadata_warning = (
