@@ -3,6 +3,8 @@ import { useState } from "react";
 export default function DropZone({ onLoaded }) {
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ignoreDarkRef, setIgnoreDarkRef] = useState(false);
+  const [ignoreWhiteRef, setIgnoreWhiteRef] = useState(false);
 
   async function handleLoad(customPath) {
     const trimmedPath = typeof customPath === "string" ? customPath.trim() : path.trim();
@@ -14,6 +16,8 @@ export default function DropZone({ onLoaded }) {
     setLoading(true);
     const body = new FormData();
     body.append("folder_path", trimmedPath);
+    body.append("ignore_dark_ref", ignoreDarkRef);
+    body.append("ignore_white_ref", ignoreWhiteRef);
 
     try {
       const res = await fetch("http://127.0.0.1:8000/load", {
@@ -53,6 +57,25 @@ export default function DropZone({ onLoaded }) {
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
+      </div>
+      <div className="field-group inline">
+        <label className="field-label">Calibration options</label>
+        <label className="checkbox-toggle">
+          <input
+            type="checkbox"
+            checked={ignoreDarkRef}
+            onChange={(e) => setIgnoreDarkRef(e.target.checked)}
+          />
+          Ignore dark reference
+        </label>
+        <label className="checkbox-toggle">
+          <input
+            type="checkbox"
+            checked={ignoreWhiteRef}
+            onChange={(e) => setIgnoreWhiteRef(e.target.checked)}
+          />
+          Ignore white reference
+        </label>
       </div>
       <div className="dropzone__actions">
         <button className="btn btn-primary" onClick={() => handleLoad()} disabled={loading}>

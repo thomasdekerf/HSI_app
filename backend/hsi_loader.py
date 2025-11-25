@@ -92,13 +92,20 @@ def _normalize_uncalibrated_data(data: np.ndarray) -> np.ndarray:
     return np.clip(scaled, 0.0, 1.0, out=np.empty_like(array))
 
 
-def load_hsi(input_path: str):
+def load_hsi(
+    input_path: str,
+    ignore_dark_ref: bool = False,
+    ignore_white_ref: bool = False,
+):
     """
     Auto-load HSI dataset (data + dark + white refs).
     input_path can be:
       - folder containing .hdr/.raw pairs
       - single .hdr or .raw file
     Returns: tuple of (corrected hyperspectral cube (H, W, Bands), wavelengths list, warning)
+
+    ``ignore_dark_ref`` / ``ignore_white_ref`` allow skipping calibration files even if
+    they are present on disk, falling back to normalized uncorrected data.
     """
     path = Path(input_path)
     folder = path.parent if path.is_file() else path
@@ -106,8 +113,10 @@ def load_hsi(input_path: str):
     warnings_list = []
 
     # find hdr files
-    dark_hdr  = find_file(folder, "darkref")
-    white_hdr = find_file(folder, "whiteref")
+    dark_hdr_original = find_file(folder, "darkref")
+    white_hdr_original = find_file(folder, "whiteref")
+    dark_hdr = None if ignore_dark_ref else dark_hdr_original
+    white_hdr = None if ignore_white_ref else white_hdr_original
     data_hdr  = None
 
     # choose data file (first hdr that is not ref)
@@ -127,6 +136,12 @@ def load_hsi(input_path: str):
     data_ref = np.array(data_img.load(), dtype=np.float32)
     wavelengths = _extract_wavelengths(getattr(data_img, "metadata", None))
 
+    ignored_parts = []
+    if ignore_dark_ref:
+        ignored_parts.append("DARKREF")
+    if ignore_white_ref:
+        ignored_parts.append("WHITEREF")
+
     if dark_hdr and white_hdr:
         dark_ref  = np.array(envi.open(str(dark_hdr),  str(raw_from_hdr(dark_hdr))).load(), dtype=np.float32)
         white_ref = np.array(envi.open(str(white_hdr), str(raw_from_hdr(white_hdr))).load(), dtype=np.float32)
@@ -138,16 +153,23 @@ def load_hsi(input_path: str):
         corrected = np.clip(corrected, 0, 1)
     else:
         missing_parts = []
-        if not dark_hdr:
+        if not dark_hdr and not ignore_dark_ref and dark_hdr_original is None:
             missing_parts.append("DARKREF")
-        if not white_hdr:
+        if not white_hdr and not ignore_white_ref and white_hdr_original is None:
             missing_parts.append("WHITEREF")
 
-        calibration_warning = (
-            f"Calibration reference files missing ({', '.join(missing_parts)}); returning normalized uncorrected data."
-        )
-        warnings_list.append(calibration_warning)
-        warnings.warn(calibration_warning)
+        if missing_parts or ignored_parts:
+            details = []
+            if missing_parts:
+                details.append(f"missing ({', '.join(missing_parts)})")
+            if ignored_parts:
+                details.append(f"ignored by request ({', '.join(ignored_parts)})")
+            calibration_warning = (
+                f"Calibration reference files {'; '.join(details)}; returning normalized uncorrected data."
+            )
+            warnings_list.append(calibration_warning)
+            warnings.warn(calibration_warning)
+
         corrected = _normalize_uncalibrated_data(data_ref)
 
     if wavelengths is None or len(wavelengths) != corrected.shape[2]:

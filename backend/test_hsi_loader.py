@@ -70,3 +70,42 @@ def test_preserves_calibrated_path(monkeypatch, tmp_path):
     assert np.allclose(corrected, expected)
     assert wavelengths == [10.0, 20.0]
     assert warning is None
+
+
+def test_can_ignore_calibration_refs(monkeypatch, tmp_path):
+    data = np.array(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+        ]
+    )
+    dark = np.zeros_like(data)
+    white = np.ones_like(data) * 2
+
+    data_hdr = tmp_path / "scene.hdr"
+    dark_hdr = tmp_path / "darkref.hdr"
+    white_hdr = tmp_path / "whiteref.hdr"
+    for hdr in (data_hdr, dark_hdr, white_hdr):
+        hdr.touch()
+
+    hdr_sequence = [data_hdr, dark_hdr, white_hdr]
+    monkeypatch.setattr(hsi_loader, "_iter_hdr_files", lambda _folder: iter(hdr_sequence))
+    monkeypatch.setattr(hsi_loader, "find_file", lambda _folder, keyword: dark_hdr if keyword.lower() == "darkref" else white_hdr)
+
+    def _open_stub(hdr_path, _raw_path):
+        if "darkref" in hdr_path:
+            return _DummyEnviImage(dark)
+        if "whiteref" in hdr_path:
+            return _DummyEnviImage(white)
+        return _DummyEnviImage(data, metadata={"wavelength": [10, 20]})
+
+    monkeypatch.setattr(hsi_loader.envi, "open", _open_stub)
+
+    corrected, wavelengths, warning = hsi_loader.load_hsi(
+        str(tmp_path), ignore_dark_ref=True, ignore_white_ref=True
+    )
+
+    expected = hsi_loader._normalize_uncalibrated_data(data)
+    assert np.allclose(corrected, expected)
+    assert wavelengths == [10.0, 20.0]
+    assert warning and "ignored by request" in warning

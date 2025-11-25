@@ -479,6 +479,8 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
 async def load_dataset(
     folder_path: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
+    ignore_dark_ref: bool = Form(False),
+    ignore_white_ref: bool = Form(False),
 ):
     global CUBE, BANDS
 
@@ -509,7 +511,11 @@ async def load_dataset(
                 status_code=400,
             )
 
-        CUBE, BANDS, warning_text = load_hsi(load_target)
+        CUBE, BANDS, warning_text = load_hsi(
+            load_target,
+            ignore_dark_ref=bool(ignore_dark_ref),
+            ignore_white_ref=bool(ignore_white_ref),
+        )
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
