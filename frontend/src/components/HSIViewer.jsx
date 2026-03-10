@@ -129,7 +129,10 @@ export default function HSIViewer({
             </div>
 
             <div className="viewer-adjustments">
-              <div className="band-sliders">
+              <div className="display-sliders display-sliders--compact">
+                <div className="display-sliders__header">
+                  <span className="annotation-tools__label">Band selection</span>
+                </div>
                 {["R", "G", "B"].map((channel, index) => (
                   <div key={channel} className="band-sliders__item">
                     <label className="band-sliders__label">
@@ -147,12 +150,12 @@ export default function HSIViewer({
                 ))}
               </div>
 
-              <div className="display-sliders">
+              <div className="display-sliders display-sliders--compact">
                 <div className="display-sliders__header">
                   <span className="annotation-tools__label">Display tuning</span>
                   <button
                     type="button"
-                    className="btn btn-ghost"
+                    className="btn btn-ghost btn--compact"
                     onClick={() => {
                       setBrightness(100);
                       setContrast(100);

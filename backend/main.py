@@ -481,6 +481,9 @@ async def load_dataset(
     files: Optional[List[UploadFile]] = File(None),
     ignore_dark_ref: bool = Form(False),
     ignore_white_ref: bool = Form(False),
+    max_height: Optional[int] = Form(None),
+    max_width: Optional[int] = Form(None),
+    max_bands: Optional[int] = Form(None),
 ):
     global CUBE, BANDS
 
@@ -515,6 +518,9 @@ async def load_dataset(
             load_target,
             ignore_dark_ref=bool(ignore_dark_ref),
             ignore_white_ref=bool(ignore_white_ref),
+            max_height=max_height,
+            max_width=max_width,
+            max_bands=max_bands,
         )
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)

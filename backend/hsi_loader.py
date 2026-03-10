@@ -92,10 +92,48 @@ def _normalize_uncalibrated_data(data: np.ndarray) -> np.ndarray:
     return np.clip(scaled, 0.0, 1.0, out=np.empty_like(array))
 
 
+def _crop_axis_to_size(length: int, max_length: Optional[int]) -> slice:
+    if max_length is None:
+        return slice(0, length)
+    max_length = int(max_length)
+    if max_length <= 0:
+        raise ValueError("Crop sizes must be positive integers")
+    if max_length >= length:
+        return slice(0, length)
+    start = (length - max_length) // 2
+    end = start + max_length
+    return slice(start, end)
+
+
+def _apply_crop_limits(
+    cube: np.ndarray,
+    wavelengths: Optional[List[float]],
+    max_height: Optional[int] = None,
+    max_width: Optional[int] = None,
+    max_bands: Optional[int] = None,
+):
+    height_slice = _crop_axis_to_size(cube.shape[0], max_height)
+    width_slice = _crop_axis_to_size(cube.shape[1], max_width)
+    band_slice = _crop_axis_to_size(cube.shape[2], max_bands)
+
+    cropped_cube = cube[height_slice, width_slice, band_slice]
+    cropped_wavelengths = wavelengths[band_slice] if wavelengths is not None else None
+
+    crop_applied = (
+        cropped_cube.shape[0] != cube.shape[0]
+        or cropped_cube.shape[1] != cube.shape[1]
+        or cropped_cube.shape[2] != cube.shape[2]
+    )
+    return cropped_cube, cropped_wavelengths, crop_applied
+
+
 def load_hsi(
     input_path: str,
     ignore_dark_ref: bool = False,
     ignore_white_ref: bool = False,
+    max_height: Optional[int] = None,
+    max_width: Optional[int] = None,
+    max_bands: Optional[int] = None,
 ):
     """
     Auto-load HSI dataset (data + dark + white refs).
@@ -179,6 +217,19 @@ def load_hsi(
         warnings_list.append(metadata_warning)
         wavelengths = list(range(corrected.shape[2]))
         warnings.warn(metadata_warning)
+
+    corrected, wavelengths, crop_applied = _apply_crop_limits(
+        corrected,
+        wavelengths,
+        max_height=max_height,
+        max_width=max_width,
+        max_bands=max_bands,
+    )
+    if crop_applied:
+        crop_warning = (
+            f"Dataset cropped to {corrected.shape[0]}x{corrected.shape[1]}x{corrected.shape[2]}"
+        )
+        warnings_list.append(crop_warning)
 
     warning_text = "; ".join(warnings_list) if warnings_list else None
     return corrected, wavelengths, warning_text

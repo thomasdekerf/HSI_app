@@ -33,6 +33,9 @@ export default function DropZone({
   const [path, setPath] = useState("");
   const [ignoreDarkRef, setIgnoreDarkRef] = useState(false);
   const [ignoreWhiteRef, setIgnoreWhiteRef] = useState(false);
+  const [maxHeight, setMaxHeight] = useState("");
+  const [maxWidth, setMaxWidth] = useState("");
+  const [maxBands, setMaxBands] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -60,6 +63,9 @@ export default function DropZone({
     ], {
       ignoreDarkRef,
       ignoreWhiteRef,
+      maxHeight: maxHeight.trim() ? Number(maxHeight) : null,
+      maxWidth: maxWidth.trim() ? Number(maxWidth) : null,
+      maxBands: maxBands.trim() ? Number(maxBands) : null,
     });
     setPath("");
   };
@@ -72,6 +78,9 @@ export default function DropZone({
     onQueueMeasurements(groupFilesIntoMeasurements(files), {
       ignoreDarkRef,
       ignoreWhiteRef,
+      maxHeight: maxHeight.trim() ? Number(maxHeight) : null,
+      maxWidth: maxWidth.trim() ? Number(maxWidth) : null,
+      maxBands: maxBands.trim() ? Number(maxBands) : null,
     });
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -163,6 +172,48 @@ export default function DropZone({
             />
             Ignore white reference
           </label>
+        </div>
+      </div>
+
+      <div className="field-group">
+        <label className="field-label">Auto-crop limits</label>
+        <div className="crop-grid">
+          <label className="field-group">
+            <span className="muted-text">Max height</span>
+            <input
+              type="number"
+              min={1}
+              value={maxHeight}
+              onChange={(event) => setMaxHeight(event.target.value)}
+              className="field-input field-input--compact"
+              placeholder="Full"
+            />
+          </label>
+          <label className="field-group">
+            <span className="muted-text">Max width</span>
+            <input
+              type="number"
+              min={1}
+              value={maxWidth}
+              onChange={(event) => setMaxWidth(event.target.value)}
+              className="field-input field-input--compact"
+              placeholder="Full"
+            />
+          </label>
+          <label className="field-group">
+            <span className="muted-text">Max bands</span>
+            <input
+              type="number"
+              min={1}
+              value={maxBands}
+              onChange={(event) => setMaxBands(event.target.value)}
+              className="field-input field-input--compact"
+              placeholder="Full"
+            />
+          </label>
+        </div>
+        <div className="muted-text">
+          If set, the cube is center-cropped during load before viewing and analysis.
         </div>
       </div>
 

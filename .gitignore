@@ -21,3 +21,5 @@ dist/
 *.png
 *.jpg
 patch
+
+HSI_analysis/

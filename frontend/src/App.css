@@ -258,6 +258,11 @@ body {
   color: var(--accent-strong);
 }
 
+.btn--compact {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
 .checkbox-toggle {
   display: inline-flex;
   align-items: center;
@@ -273,6 +278,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.crop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .measurement-listbox {
@@ -468,16 +479,18 @@ body {
 }
 
 .viewer-panel__controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 320px) minmax(260px, 1fr);
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   align-items: start;
+  max-width: 420px;
 }
 
 .viewer-adjustments {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
 }
 
 .display-sliders {
@@ -488,6 +501,7 @@ body {
   border: 1px solid #c8d1db;
   border-radius: var(--radius-md);
   background: #fff;
+  width: 100%;
 }
 
 .display-sliders__header {
@@ -495,6 +509,11 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+}
+
+.display-sliders--compact {
+  gap: 10px;
+  padding: 10px 12px;
 }
 
 .annotation-tools {
@@ -910,14 +929,6 @@ body {
 }
 
 @media (max-width: 900px) {
-  .viewer-panel__controls {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .viewer-adjustments {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .app-frame__header {
     flex-direction: column;
     align-items: flex-start;
@@ -958,5 +969,9 @@ body {
   .measurement-listbox__item {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .crop-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
