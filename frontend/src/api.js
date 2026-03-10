@@ -1,5 +1,15 @@
 const API = "http://127.0.0.1:8000";
 
+export async function listMeasurements(folderPath) {
+  const params = new URLSearchParams({ folder_path: folderPath });
+  const res = await fetch(`${API}/measurements?${params.toString()}`);
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  return data.measurements || [];
+}
+
 export async function loadDataset(source, options = {}) {
   const body = new FormData();
 
@@ -11,6 +21,10 @@ export async function loadDataset(source, options = {}) {
     body.append("folder_path", source.path);
   } else {
     throw new Error("No dataset source provided.");
+  }
+
+  if (source?.dataHdrName) {
+    body.append("data_hdr_name", source.dataHdrName);
   }
 
   body.append("ignore_dark_ref", Boolean(options.ignoreDarkRef));

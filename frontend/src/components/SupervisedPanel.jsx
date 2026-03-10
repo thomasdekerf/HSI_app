@@ -20,6 +20,13 @@ const CLASS_COLORS = [
   "#00c7be",
 ];
 
+const STATUS_STEPS = [
+  "Running PCA",
+  "Finding endmembers and SAM maps",
+  "Computing ratios, entropy, depth, and variance",
+  "Packaging thumbnails and views",
+];
+
 function createRegionId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -45,6 +52,10 @@ export default function SupervisedPanel({
   idxs = [],
   onChange,
   cubeShape,
+  derivedVisuals = [],
+  onRunSuite,
+  suiteLoading,
+  suiteError,
 }) {
   const [classes, setClasses] = useState([]);
   const [regions, setRegions] = useState([]);
@@ -56,6 +67,8 @@ export default function SupervisedPanel({
   const [formError, setFormError] = useState("");
   const [annotationMessage, setAnnotationMessage] = useState("");
   const [drawMode, setDrawMode] = useState("rectangle");
+  const [selectedViewId, setSelectedViewId] = useState("frgb");
+  const [statusIndex, setStatusIndex] = useState(0);
   const colorIndexRef = useRef(0);
 
   useEffect(() => {
@@ -68,7 +81,16 @@ export default function SupervisedPanel({
     colorIndexRef.current = 0;
     setAnnotationMessage("");
     setDrawMode("rectangle");
+    setSelectedViewId("frgb");
   }, [bands]);
+
+  useEffect(() => {
+    if (!suiteLoading) return undefined;
+    const timer = window.setInterval(() => {
+      setStatusIndex((prev) => (prev + 1) % STATUS_STEPS.length);
+    }, 850);
+    return () => window.clearInterval(timer);
+  }, [suiteLoading]);
 
   const classMap = useMemo(() => {
     const mapping = new Map();
@@ -206,6 +228,34 @@ export default function SupervisedPanel({
     if (!rgb) return null;
     return `data:image/jpeg;base64,${hexToBase64(rgb)}`;
   }, [rgb]);
+
+  const backgroundViews = useMemo(
+    () => [
+      {
+        id: "frgb",
+        label: "False RGB",
+        description: "Band-selected false-RGB view for annotation.",
+        imageUrl,
+      },
+      ...derivedVisuals.map((visual) => ({
+        ...visual,
+        imageUrl: `data:image/png;base64,${hexToBase64(visual.image)}`,
+      })),
+    ],
+    [derivedVisuals, imageUrl],
+  );
+
+  const selectedView = useMemo(
+    () => backgroundViews.find((view) => view.id === selectedViewId) || backgroundViews[0] || null,
+    [backgroundViews, selectedViewId],
+  );
+
+  useEffect(() => {
+    if (!selectedView || backgroundViews.some((view) => view.id === selectedView.id)) {
+      return;
+    }
+    setSelectedViewId("frgb");
+  }, [backgroundViews, selectedView]);
 
   const displayRegions = useMemo(
     () =>
@@ -349,7 +399,7 @@ export default function SupervisedPanel({
               )}
             </div>
             <ViewerCanvas
-              imageUrl={imageUrl}
+              imageUrl={selectedView?.imageUrl || null}
               regions={displayRegions}
               onRegion={handleRegion}
               drawMode={drawMode}
@@ -360,6 +410,44 @@ export default function SupervisedPanel({
               </div>
             )}
             {annotationMessage && <div className="notice notice--warning">{annotationMessage}</div>}
+          </div>
+
+          <div className="display-sliders display-sliders--compact">
+            <div className="display-sliders__header">
+              <span className="annotation-tools__label">Annotation background</span>
+              <button type="button" className="btn btn-primary btn--compact" onClick={onRunSuite} disabled={suiteLoading}>
+                {suiteLoading ? "Calculating..." : "Calculate suite"}
+              </button>
+            </div>
+            {suiteLoading && (
+              <div className="analysis-status">
+                <div className="analysis-status__bar">
+                  <div
+                    className="analysis-status__bar-fill"
+                    style={{ width: `${((statusIndex + 1) / STATUS_STEPS.length) * 100}%` }}
+                  />
+                </div>
+                <div className="analysis-status__label">{STATUS_STEPS[statusIndex]}</div>
+              </div>
+            )}
+            {suiteError && <div className="form-error">{suiteError}</div>}
+            <div className="analysis-thumbnail-grid analysis-thumbnail-grid--viewer">
+              {backgroundViews.map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  className={`analysis-thumb${selectedView?.id === view.id ? " is-active" : ""}`}
+                  onClick={() => setSelectedViewId(view.id)}
+                >
+                  {view.imageUrl ? (
+                    <img src={view.imageUrl} alt={view.label} className="analysis-thumb__image" />
+                  ) : (
+                    <div className="analysis-thumb__placeholder">{view.label}</div>
+                  )}
+                  <span className="analysis-thumb__label">{view.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {regions.length > 0 && (

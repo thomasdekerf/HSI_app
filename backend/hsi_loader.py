@@ -153,6 +153,7 @@ def load_hsi(
     crop_left: Optional[int] = None,
     crop_right: Optional[int] = None,
     max_bands: Optional[int] = None,
+    data_hdr_name: Optional[str] = None,
 ):
     """
     Auto-load HSI dataset (data + dark + white refs).
@@ -176,14 +177,23 @@ def load_hsi(
     white_hdr = None if ignore_white_ref else white_hdr_original
     data_hdr  = None
 
-    # choose data file (first hdr that is not ref)
+    # choose data file (first hdr that is not ref, or the requested one)
     hdrs = list(_iter_hdr_files(folder))
+    normalized_target = None
+    if data_hdr_name:
+        normalized_target = data_hdr_name.lower()
+        if not normalized_target.endswith(".hdr"):
+            normalized_target = f"{normalized_target}.hdr"
     for f in hdrs:
-        if "darkref" not in f.name.lower() and "whiteref" not in f.name.lower():
+        if "darkref" in f.name.lower() or "whiteref" in f.name.lower():
+            continue
+        if normalized_target is None or f.name.lower() == normalized_target:
             data_hdr = f
             break
 
     if data_hdr is None:
+        if data_hdr_name:
+            raise FileNotFoundError(f'Missing data .hdr file "{data_hdr_name}"')
         raise FileNotFoundError("Missing data .hdr file")
 
     # corresponding raw file paths
@@ -253,7 +263,7 @@ def load_hsi(
         warnings_list.append(crop_warning)
 
     warning_text = "; ".join(warnings_list) if warnings_list else None
-    return corrected, wavelengths, warning_text
+    return corrected, wavelengths, warning_text, data_hdr.stem
 
 def extract_rgb(cube: np.ndarray, idxs):
     """Extract pseudo-RGB image from cube given band indices."""

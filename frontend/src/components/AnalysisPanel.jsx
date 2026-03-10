@@ -1,121 +1,99 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { runAnalysis } from "../api";
 import { hexToBase64 } from "../utils/image";
-import AnalysisImageViewer from "./AnalysisImageViewer";
+import ViewerCanvas from "./ViewerCanvas";
+import SpectraPlot from "./SpectraPlot";
 
-function formatPercentage(value) {
-  if (!Number.isFinite(value)) return "-";
-  return `${value.toFixed(2)}%`;
-}
+const STATUS_STEPS = [
+  "Running PCA representations",
+  "Building SAM distance and class maps",
+  "Computing ratio and entropy views",
+  "Finishing contrast-enhanced descriptors",
+];
 
-function formatNumber(value, fractionDigits = 3) {
-  if (!Number.isFinite(value)) return "-";
-  return value.toFixed(fractionDigits);
-}
+export default function AnalysisPanel({
+  cubeShape,
+  selections = [],
+  allSelections = [],
+  onRegion,
+  onClearSelections,
+}) {
+  const [visuals, setVisuals] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [statusIndex, setStatusIndex] = useState(0);
+  const [drawMode, setDrawMode] = useState("rectangle");
+  const stageContainerRef = useRef(null);
+  const [stageWidth, setStageWidth] = useState(0);
 
-export default function AnalysisPanel({ bands, cubeShape }) {
-  const [pcaCount, setPcaCount] = useState(3);
-  const [pcaLoading, setPcaLoading] = useState(false);
-  const [pcaError, setPcaError] = useState("");
-  const [pcaResult, setPcaResult] = useState(null);
+  useEffect(() => {
+    if (!stageContainerRef.current) return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setStageWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(stageContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
-  const [clusterCount, setClusterCount] = useState(5);
-  const [kmeansLoading, setKmeansLoading] = useState(false);
-  const [kmeansError, setKmeansError] = useState("");
-  const [kmeansResult, setKmeansResult] = useState(null);
+  useEffect(() => {
+    if (!loading) return undefined;
+    const timer = window.setInterval(() => {
+      setStatusIndex((prev) => (prev + 1) % STATUS_STEPS.length);
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
-  const [selectedView, setSelectedView] = useState(null);
+  const availableVisuals = useMemo(
+    () =>
+      visuals.map((visual) => ({
+        ...visual,
+        imageUrl: `data:image/png;base64,${hexToBase64(visual.image)}`,
+      })),
+    [visuals],
+  );
 
-  const datasetReady = Array.isArray(bands) && bands.length > 0;
-  const bandCount = useMemo(() => (Array.isArray(bands) ? bands.length : 0), [bands]);
-
-  const availableVisuals = useMemo(() => {
-    const visuals = [];
-    if (pcaResult?.components?.length) {
-      pcaResult.components.forEach((component) => {
-        visuals.push({
-          id: `pca-${component.index}`,
-          label: `PCA Component ${component.index + 1}`,
-          image: `data:image/png;base64,${hexToBase64(component.image)}`,
-          description: `Explained variance: ${formatPercentage(component.variance * 100)}`,
-        });
-      });
-    }
-    if (kmeansResult?.map) {
-      visuals.push({
-        id: "kmeans-map",
-        label: `K-means Cluster Map${
-          Array.isArray(kmeansResult.cluster_summaries)
-            ? ` (${kmeansResult.cluster_summaries.length} clusters)`
-            : ""
-        }`,
-        image: `data:image/png;base64,${hexToBase64(kmeansResult.map)}`,
-        description: "Pixel assignments visualized by cluster color.",
-      });
-    }
-    return visuals;
-  }, [pcaResult, kmeansResult]);
+  const selectedVisual = useMemo(
+    () => availableVisuals.find((visual) => visual.id === selectedId) || availableVisuals[0] || null,
+    [availableVisuals, selectedId],
+  );
 
   useEffect(() => {
     if (!availableVisuals.length) {
-      setSelectedView(null);
+      setSelectedId(null);
       return;
     }
-    if (!selectedView || !availableVisuals.some((visual) => visual.id === selectedView)) {
-      setSelectedView(availableVisuals[0].id);
+    if (!selectedId || !availableVisuals.some((visual) => visual.id === selectedId)) {
+      setSelectedId(availableVisuals[0].id);
     }
-  }, [availableVisuals, selectedView]);
+  }, [availableVisuals, selectedId]);
 
-  const handleRunPCA = async () => {
-    if (!datasetReady) return;
-    const components = Math.max(1, Math.min(6, Number(pcaCount) || 3));
-    setPcaCount(components);
-    setPcaLoading(true);
-    setPcaError("");
+  const regions = selections.map((selection) => ({
+    id: selection.id,
+    shape: selection.shape || { type: "rectangle", ...selection.bounds },
+    color: selection.color,
+  }));
+
+  const handleRunAll = async () => {
+    setLoading(true);
+    setError("");
+    setStatusIndex(0);
     try {
-      const result = await runAnalysis("pca", { components });
-      setPcaResult(result);
-      if (result?.components?.length) {
-        setSelectedView(`pca-${result.components[0].index}`);
-      }
-    } catch (error) {
-      setPcaError(error.message || "Failed to compute PCA components.");
-      setPcaResult(null);
+      const result = await runAnalysis("unsupervised_suite");
+      setVisuals(Array.isArray(result.visuals) ? result.visuals : []);
+    } catch (runError) {
+      setVisuals([]);
+      setError(runError.message || "Failed to compute unsupervised representations.");
     } finally {
-      setPcaLoading(false);
+      setLoading(false);
     }
   };
-
-  const handleRunKMeans = async () => {
-    if (!datasetReady) return;
-    const clusters = Math.max(2, Math.min(15, Number(clusterCount) || 5));
-    setClusterCount(clusters);
-    setKmeansLoading(true);
-    setKmeansError("");
-    try {
-      const result = await runAnalysis("kmeans", { clusters });
-      setKmeansResult(result);
-      if (result?.map) {
-        setSelectedView("kmeans-map");
-      }
-    } catch (error) {
-      setKmeansError(error.message || "Failed to compute k-means clustering.");
-      setKmeansResult(null);
-    } finally {
-      setKmeansLoading(false);
-    }
-  };
-
-  if (!datasetReady) {
-    return (
-      <div className="card analysis-empty">
-        Load a hyperspectral dataset to enable unsupervised analysis.
-      </div>
-    );
-  }
 
   return (
-    <div className="analysis-layout">
+    <div className="analysis-workbench">
       <div className="analysis-sidebar">
         {cubeShape && cubeShape.length === 3 && (
           <div className="analysis-sidebar__meta">
@@ -123,165 +101,123 @@ export default function AnalysisPanel({ bands, cubeShape }) {
             <span className="meta-value">
               {cubeShape[0]} × {cubeShape[1]} × {cubeShape[2]}
             </span>
-            <span className="meta-hint">height × width × bands</span>
+            <span className="meta-hint">All derived views remain aligned to these pixel coordinates.</span>
           </div>
         )}
 
         <section className="card analysis-section">
-          <h3 className="card__title">Principal Component Analysis</h3>
+          <h3 className="card__title">Unsupervised representations</h3>
           <p className="card__subtitle">
-            Extract dominant spectral trends and explore their spatial expression across the
-            scene.
+            Generate a vibrant unsupervised view set and annotate any derived image exactly like the
+            false-RGB view.
           </p>
-          <div className="field-group inline">
-            <label className="field-label" htmlFor="pca-components">
-              Components (1 – 6)
-            </label>
-            <input
-              id="pca-components"
-              type="number"
-              min={1}
-              max={Math.max(1, Math.min(10, bandCount))}
-              value={pcaCount}
-              onChange={(e) => setPcaCount(e.target.value)}
-              className="field-input field-input--compact"
-              disabled={pcaLoading}
-            />
-          </div>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleRunPCA}
-            disabled={pcaLoading}
-          >
-            {pcaLoading ? "Computing…" : "Run PCA"}
+          <button type="button" className="btn btn-primary" onClick={handleRunAll} disabled={loading}>
+            {loading ? "Calculating..." : "Calculate all representations"}
           </button>
-          {pcaError && <div className="form-error">{pcaError}</div>}
-          {pcaResult?.components?.length > 0 && (
-            <div className="thumbnail-grid">
-              {pcaResult.components.map((component) => (
-                <article key={component.index} className="thumbnail-card">
-                  <header className="thumbnail-card__header">
-                    <span className="thumbnail-card__title">PC {component.index + 1}</span>
-                    <span className="thumbnail-card__meta">
-                      {formatPercentage(component.variance * 100)} variance
-                    </span>
-                  </header>
-                  <img
-                    src={`data:image/png;base64,${hexToBase64(component.image)}`}
-                    alt={`Principal Component ${component.index + 1}`}
-                    className="thumbnail-card__image"
-                  />
-                  <button
-                    type="button"
-                    className={`btn btn-ghost${
-                      selectedView === `pca-${component.index}` ? " is-active" : ""
-                    }`}
-                    onClick={() => setSelectedView(`pca-${component.index}`)}
-                  >
-                    {selectedView === `pca-${component.index}` ? "Viewing" : "View large"}
-                  </button>
-                </article>
-              ))}
+          {loading && (
+            <div className="analysis-status">
+              <div className="analysis-status__bar">
+                <div
+                  className="analysis-status__bar-fill"
+                  style={{ width: `${((statusIndex + 1) / STATUS_STEPS.length) * 100}%` }}
+                />
+              </div>
+              <div className="analysis-status__label">{STATUS_STEPS[statusIndex]}</div>
             </div>
           )}
+          {error && <div className="form-error">{error}</div>}
         </section>
 
         <section className="card analysis-section">
-          <h3 className="card__title">K-means spectral clustering</h3>
-          <p className="card__subtitle">
-            Segment the scene into materials with comparable reflectance signatures for rapid
-            interpretation.
-          </p>
-          <div className="field-group inline">
-            <label className="field-label" htmlFor="kmeans-clusters">
-              Clusters (2 – 15)
-            </label>
-            <input
-              id="kmeans-clusters"
-              type="number"
-              min={2}
-              max={15}
-              value={clusterCount}
-              onChange={(e) => setClusterCount(e.target.value)}
-              className="field-input field-input--compact"
-              disabled={kmeansLoading}
-            />
+          <div className="analysis-thumbnail-header">
+            <h3 className="card__title">Available views</h3>
+            <div className="muted-text">{availableVisuals.length} generated</div>
           </div>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleRunKMeans}
-            disabled={kmeansLoading}
-          >
-            {kmeansLoading ? "Clustering…" : "Run clustering"}
-          </button>
-          {kmeansError && <div className="form-error">{kmeansError}</div>}
-          {kmeansResult?.map && (
-            <div className="cluster-results">
-              <div className="thumbnail-card">
-                <header className="thumbnail-card__header">
-                  <span className="thumbnail-card__title">Cluster map</span>
-                  {Array.isArray(kmeansResult.cluster_summaries) && (
-                    <span className="thumbnail-card__meta">
-                      {kmeansResult.cluster_summaries.length} clusters
-                    </span>
-                  )}
-                </header>
-                <img
-                  src={`data:image/png;base64,${hexToBase64(kmeansResult.map)}`}
-                  alt="K-means cluster map"
-                  className="thumbnail-card__image"
-                />
-                <button
-                  type="button"
-                  className={`btn btn-ghost${selectedView === "kmeans-map" ? " is-active" : ""}`}
-                  onClick={() => setSelectedView("kmeans-map")}
-                >
-                  {selectedView === "kmeans-map" ? "Viewing" : "View large"}
-                </button>
+          <div className="analysis-thumbnail-grid">
+            {availableVisuals.length === 0 && (
+              <div className="muted-text">
+                Run the suite to populate PCA, SAM, ratio, entropy, ambiguity, abundance, and
+                descriptor maps.
               </div>
-              {Array.isArray(kmeansResult.cluster_summaries) && (
-                <div className="cluster-summary">
-                  <div className="cluster-summary__title">Cluster summary</div>
-                  <table className="cluster-summary__table">
-                    <thead>
-                      <tr>
-                        <th>Cluster</th>
-                        <th>Pixels</th>
-                        <th>Share</th>
-                        <th>Mean reflectance</th>
-                        <th>Peak band</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {kmeansResult.cluster_summaries.map((summary) => (
-                        <tr key={summary.cluster}>
-                          <td>{summary.cluster}</td>
-                          <td>{summary.count}</td>
-                          <td>{formatPercentage(summary.percentage)}</td>
-                          <td>{formatNumber(summary.mean)}</td>
-                          <td>
-                            {summary.peak_wavelength !== undefined && summary.peak_wavelength !== null
-                              ? `${formatNumber(summary.peak_wavelength, 1)} nm`
-                              : `Band ${summary.peak_band_index}`}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
+            )}
+            {availableVisuals.map((visual) => (
+              <button
+                key={visual.id}
+                type="button"
+                className={`analysis-thumb${selectedVisual?.id === visual.id ? " is-active" : ""}`}
+                onClick={() => setSelectedId(visual.id)}
+              >
+                <img src={visual.imageUrl} alt={visual.label} className="analysis-thumb__image" />
+                <span className="analysis-thumb__label">{visual.label}</span>
+              </button>
+            ))}
+          </div>
         </section>
       </div>
-      <div className="analysis-viewer card">
-        <AnalysisImageViewer
-          visuals={availableVisuals}
-          selectedId={selectedView}
-          onSelect={setSelectedView}
-        />
+
+      <div className="analysis-main">
+        <section className="window-panel viewer-window">
+          <header className="window-panel__header">
+            <div>
+              <h3 className="window-panel__title">{selectedVisual?.label || "Derived image viewer"}</h3>
+              <div className="window-panel__meta">
+                {selectedVisual?.description || "Choose a generated representation to inspect and annotate."}
+              </div>
+            </div>
+            {selections.length > 0 && (
+              <button type="button" className="btn btn-ghost" onClick={onClearSelections}>
+                Clear measurement annotations
+              </button>
+            )}
+          </header>
+          <div className="viewer-window__body">
+            <div className="viewer-panel__stage" ref={stageContainerRef}>
+              <ViewerCanvas
+                imageUrl={selectedVisual?.imageUrl || null}
+                regions={regions}
+                onRegion={onRegion}
+                maxWidth={stageWidth}
+                maxHeight={760}
+                drawMode={drawMode}
+              />
+            </div>
+            <div className="annotation-tools">
+              <span className="annotation-tools__label">Annotation shape</span>
+              <div className="annotation-tools__options">
+                {[
+                  { id: "rectangle", label: "Rectangle" },
+                  { id: "circle", label: "Circle" },
+                  { id: "point", label: "Point" },
+                  { id: "polygon", label: "Polygon" },
+                ].map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`annotation-tools__button${drawMode === option.id ? " is-active" : ""}`}
+                    onClick={() => setDrawMode(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="analysis-annotation-hint">
+              These annotations still extract spectra from the underlying hyperspectral cube.
+            </div>
+          </div>
+        </section>
+
+        <section className="window-panel spectra-window">
+          <header className="window-panel__header">
+            <div>
+              <h3 className="window-panel__title">Spectra Window</h3>
+              <div className="window-panel__meta">
+                Annotations taken on derived representations still sample the original cube spectra.
+              </div>
+            </div>
+          </header>
+          <SpectraPlot selections={allSelections} currentSelections={selections} />
+        </section>
       </div>
     </div>
   );

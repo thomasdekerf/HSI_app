@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DropZone from "./components/DropZone";
 import HSIViewer from "./components/HSIViewer";
-import AnalysisPanel from "./components/AnalysisPanel";
 import SupervisedPanel from "./components/SupervisedPanel";
-import { getRGB, getSpectra, loadDataset } from "./api";
+import { getRGB, getSpectra, loadDataset, runAnalysis } from "./api";
 import "./App.css";
 
 const EMPTY_LIST = [];
@@ -37,6 +36,16 @@ function updateMeasurementById(measurements, measurementId, updater) {
   );
 }
 
+function measurementOptionSignature(options) {
+  return JSON.stringify({
+    cropTop: options?.cropTop ?? null,
+    cropBottom: options?.cropBottom ?? null,
+    cropLeft: options?.cropLeft ?? null,
+    cropRight: options?.cropRight ?? null,
+    maxBands: options?.maxBands ?? null,
+  });
+}
+
 export default function App() {
   const [measurements, setMeasurements] = useState([]);
   const [activeMeasurementId, setActiveMeasurementId] = useState(null);
@@ -44,6 +53,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("viewer");
   const [warning, setWarning] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [suiteLoading, setSuiteLoading] = useState(false);
+  const [suiteError, setSuiteError] = useState("");
 
   const activeMeasurement = useMemo(
     () => measurements.find((measurement) => measurement.id === activeMeasurementId) || null,
@@ -69,6 +80,11 @@ export default function App() {
       options: {
         ignoreDarkRef: Boolean(options?.ignoreDarkRef),
         ignoreWhiteRef: Boolean(options?.ignoreWhiteRef),
+        cropTop: options?.cropTop ?? null,
+        cropBottom: options?.cropBottom ?? null,
+        cropLeft: options?.cropLeft ?? null,
+        cropRight: options?.cropRight ?? null,
+        maxBands: options?.maxBands ?? null,
       },
       isLoaded: false,
       isLoading: false,
@@ -79,6 +95,8 @@ export default function App() {
       rgb: null,
       shape: null,
       selections: [],
+      loadedOptionSignature: "",
+      analysisVisuals: [],
     }));
 
     setMeasurements((prev) => [...prev, ...prepared]);
@@ -87,7 +105,7 @@ export default function App() {
     }
   };
 
-  const handleActivateMeasurement = async (measurementId) => {
+  const handleActivateMeasurement = useCallback(async (measurementId) => {
     const measurement = measurements.find((entry) => entry.id === measurementId);
     if (!measurement || measurement.isLoading) {
       return;
@@ -119,11 +137,15 @@ export default function App() {
           isLoaded: true,
           isLoading: false,
           error: "",
+          name: data.data_file || entry.name,
+          loadedOptionSignature: measurementOptionSignature(entry.options),
+          analysisVisuals: [],
         })),
       );
       setBackendMeasurementId(measurementId);
       setWarning(data.warning || "");
       setActiveTab("viewer");
+      setSuiteError("");
     } catch (error) {
       setMeasurements((prev) =>
         updateMeasurementById(prev, measurementId, (entry) => ({
@@ -134,7 +156,7 @@ export default function App() {
       );
       setWarning("");
     }
-  };
+  }, [measurements]);
 
   const handleIdxChange = (nextIdxs) => {
     if (!activeMeasurementId) return;
@@ -197,8 +219,58 @@ export default function App() {
     );
   };
 
+  const handleRunSuite = async () => {
+    if (!activeMeasurement || activeMeasurement.id !== backendMeasurementId || suiteLoading) {
+      return;
+    }
+    setSuiteLoading(true);
+    setSuiteError("");
+    try {
+      const result = await runAnalysis("unsupervised_suite");
+      setMeasurements((prev) =>
+        updateMeasurementById(prev, activeMeasurement.id, (measurement) => ({
+          ...measurement,
+          analysisVisuals: Array.isArray(result.visuals) ? result.visuals : [],
+        })),
+      );
+    } catch (error) {
+      setSuiteError(error.message || "Failed to compute unsupervised representations.");
+    } finally {
+      setSuiteLoading(false);
+    }
+  };
+
+  const handleUpdateMeasurementOptions = (measurementId, nextOptions) => {
+    setMeasurements((prev) =>
+      updateMeasurementById(prev, measurementId, (measurement) => ({
+        ...measurement,
+        options: {
+          ...measurement.options,
+          ...nextOptions,
+        },
+        selections: [],
+        analysisVisuals: [],
+      })),
+    );
+  };
+
+  const handleRemoveMeasurement = (measurementId) => {
+    setMeasurements((prev) => {
+      const remaining = prev.filter((measurement) => measurement.id !== measurementId);
+      if (activeMeasurementId === measurementId) {
+        setActiveMeasurementId(remaining[0]?.id || null);
+      }
+      if (backendMeasurementId === measurementId) {
+        setBackendMeasurementId(null);
+        setWarning("");
+      }
+      return remaining;
+    });
+  };
+
   const activeBands = activeMeasurement?.bands ?? EMPTY_LIST;
   const activeIdxs = activeMeasurement?.idxs ?? EMPTY_LIST;
+  const activeOptionSignature = measurementOptionSignature(activeMeasurement?.options);
 
   useEffect(() => {
     if (
@@ -237,9 +309,25 @@ export default function App() {
     };
   }, [activeBands, activeIdxs, activeMeasurementId, backendMeasurementId]);
 
+  useEffect(() => {
+    if (
+      !activeMeasurement ||
+      !activeMeasurement.isLoaded ||
+      activeMeasurement.id !== backendMeasurementId ||
+      activeMeasurement.loadedOptionSignature === activeOptionSignature
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      handleActivateMeasurement(activeMeasurement.id);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [activeMeasurement, activeOptionSignature, backendMeasurementId, handleActivateMeasurement]);
+
   const tabs = [
-    { id: "viewer", label: "Visualization" },
-    { id: "analysis", label: "Unsupervised Analysis" },
+    { id: "viewer", label: "Visualization + Unsupervised" },
     { id: "supervised", label: "Supervised Classification" },
   ];
 
@@ -274,10 +362,12 @@ export default function App() {
         {!sidebarCollapsed && (
           <DropZone
             measurements={measurements}
-            activeMeasurementId={activeMeasurementId}
+            activeMeasurement={activeMeasurement}
             onSelectMeasurement={setActiveMeasurementId}
             onActivateMeasurement={handleActivateMeasurement}
             onQueueMeasurements={queueMeasurements}
+            onUpdateMeasurementOptions={handleUpdateMeasurementOptions}
+            onRemoveMeasurement={handleRemoveMeasurement}
           />
         )}
 
@@ -310,18 +400,17 @@ export default function App() {
               </nav>
 
               <div className="panel-surface">
-                {activeTab === "analysis" ? (
-                  <AnalysisPanel
-                    bands={activeMeasurement.bands}
-                    cubeShape={activeMeasurement.shape}
-                  />
-                ) : activeTab === "supervised" ? (
+                {activeTab === "supervised" ? (
                   <SupervisedPanel
                     bands={activeMeasurement.bands}
                     rgb={activeMeasurement.rgb}
                     idxs={activeMeasurement.idxs}
                     onChange={handleIdxChange}
                     cubeShape={activeMeasurement.shape}
+                    derivedVisuals={activeMeasurement.analysisVisuals || []}
+                    onRunSuite={handleRunSuite}
+                    suiteLoading={suiteLoading}
+                    suiteError={suiteError}
                   />
                 ) : (
                   <HSIViewer
@@ -334,6 +423,10 @@ export default function App() {
                     allSelections={allSelections}
                     onRegion={handleRegion}
                     onClearSelections={handleClearSelections}
+                    derivedVisuals={activeMeasurement.analysisVisuals || []}
+                    onRunSuite={handleRunSuite}
+                    suiteLoading={suiteLoading}
+                    suiteError={suiteError}
                   />
                 )}
               </div>

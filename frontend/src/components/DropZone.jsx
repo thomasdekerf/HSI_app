@@ -1,34 +1,104 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { listMeasurements } from "../api";
 
 function createMeasurementId() {
   return `measurement-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function groupFilesIntoMeasurements(files) {
-  const groups = new Map();
+function getStem(filename = "") {
+  return filename.replace(/\.[^.]+$/, "");
+}
+
+function getParentKey(file) {
+  const relativePath = file.webkitRelativePath || "";
+  if (relativePath.includes("/")) {
+    return relativePath.split("/").slice(0, -1).join("/");
+  }
+  if (typeof file.path === "string" && file.path.includes("/")) {
+    return file.path.split("/").slice(0, -1).join("/");
+  }
+  return "__root__";
+}
+
+function groupMeasurementsFromFiles(files) {
+  const folderGroups = new Map();
 
   files.forEach((file) => {
-    const relativePath = file.webkitRelativePath || file.name;
-    const topLevel = relativePath.includes("/") ? relativePath.split("/")[0] : null;
-    const key = topLevel || "__dropped_files__";
-    const existing = groups.get(key) || {
-      id: createMeasurementId(),
-      name: topLevel || `Dropped files ${groups.size + 1}`,
-      source: { type: "files", files: [] },
-    };
-    existing.source.files.push(file);
-    groups.set(key, existing);
+    const key = getParentKey(file);
+    const group = folderGroups.get(key) || [];
+    group.push(file);
+    folderGroups.set(key, group);
   });
 
-  return Array.from(groups.values());
+  const measurements = [];
+
+  folderGroups.forEach((groupFiles) => {
+    const hdrFiles = groupFiles.filter((file) => {
+      const lower = file.name.toLowerCase();
+      return (
+        lower.endsWith(".hdr") &&
+        !lower.includes("darkref") &&
+        !lower.includes("whiteref")
+      );
+    });
+
+    if (hdrFiles.length === 0) {
+      measurements.push({
+        id: createMeasurementId(),
+        name: getStem(groupFiles[0]?.name || `Measurement ${measurements.length + 1}`),
+        source: { type: "files", files: groupFiles },
+      });
+      return;
+    }
+
+    hdrFiles.forEach((hdrFile) => {
+      if (typeof hdrFile.path === "string" && hdrFile.path) {
+        const folderPath = hdrFile.path.split("/").slice(0, -1).join("/");
+        measurements.push({
+          id: createMeasurementId(),
+          name: getStem(hdrFile.name),
+          source: {
+            type: "path",
+            path: folderPath,
+            dataHdrName: hdrFile.name,
+          },
+        });
+        return;
+      }
+
+      measurements.push({
+        id: createMeasurementId(),
+        name: getStem(hdrFile.name),
+        source: {
+          type: "files",
+          files: groupFiles,
+          dataHdrName: hdrFile.name,
+        },
+      });
+    });
+  });
+
+  return measurements;
+}
+
+function formatCropOptions(options) {
+  return {
+    cropTop: options?.cropTop ? String(options.cropTop) : "",
+    cropBottom: options?.cropBottom ? String(options.cropBottom) : "",
+    cropLeft: options?.cropLeft ? String(options.cropLeft) : "",
+    cropRight: options?.cropRight ? String(options.cropRight) : "",
+    maxBands: options?.maxBands ? String(options.maxBands) : "",
+  };
 }
 
 export default function DropZone({
   measurements = [],
-  activeMeasurementId,
+  activeMeasurement,
   onSelectMeasurement,
   onActivateMeasurement,
   onQueueMeasurements,
+  onUpdateMeasurementOptions,
+  onRemoveMeasurement,
 }) {
   const [path, setPath] = useState("");
   const [ignoreDarkRef, setIgnoreDarkRef] = useState(false);
@@ -39,55 +109,81 @@ export default function DropZone({
   const [cropRight, setCropRight] = useState("");
   const [maxBands, setMaxBands] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [pathLoading, setPathLoading] = useState(false);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const next = formatCropOptions(activeMeasurement?.options);
+    setCropTop(next.cropTop);
+    setCropBottom(next.cropBottom);
+    setCropLeft(next.cropLeft);
+    setCropRight(next.cropRight);
+    setMaxBands(next.maxBands);
+  }, [activeMeasurement?.id, activeMeasurement?.options]);
 
   const measurementCountLabel = useMemo(() => {
     if (measurements.length === 1) return "1 measurement queued";
     return `${measurements.length} measurements queued`;
   }, [measurements.length]);
 
-  const queuePathMeasurement = () => {
+  const buildOptions = () => ({
+    ignoreDarkRef,
+    ignoreWhiteRef,
+    cropTop: cropTop.trim() ? Number(cropTop) : null,
+    cropBottom: cropBottom.trim() ? Number(cropBottom) : null,
+    cropLeft: cropLeft.trim() ? Number(cropLeft) : null,
+    cropRight: cropRight.trim() ? Number(cropRight) : null,
+    maxBands: maxBands.trim() ? Number(maxBands) : null,
+  });
+
+  const pushOptionUpdate = (nextValues) => {
+    if (!activeMeasurement) return;
+    onUpdateMeasurementOptions(activeMeasurement.id, {
+      cropTop: nextValues.cropTop.trim() ? Number(nextValues.cropTop) : null,
+      cropBottom: nextValues.cropBottom.trim() ? Number(nextValues.cropBottom) : null,
+      cropLeft: nextValues.cropLeft.trim() ? Number(nextValues.cropLeft) : null,
+      cropRight: nextValues.cropRight.trim() ? Number(nextValues.cropRight) : null,
+      maxBands: nextValues.maxBands.trim() ? Number(nextValues.maxBands) : null,
+    });
+  };
+
+  const queuePathMeasurement = async () => {
     const trimmedPath = path.trim();
     if (!trimmedPath) {
       alert("Provide a dataset folder path first.");
       return;
     }
-
-    const name =
-      trimmedPath.split("/").filter(Boolean).at(-1) || `Measurement ${measurements.length + 1}`;
-
-    onQueueMeasurements([
-      {
-        id: createMeasurementId(),
-        name,
-        source: { type: "path", path: trimmedPath },
-      },
-    ], {
-      ignoreDarkRef,
-      ignoreWhiteRef,
-      cropTop: cropTop.trim() ? Number(cropTop) : null,
-      cropBottom: cropBottom.trim() ? Number(cropBottom) : null,
-      cropLeft: cropLeft.trim() ? Number(cropLeft) : null,
-      cropRight: cropRight.trim() ? Number(cropRight) : null,
-      maxBands: maxBands.trim() ? Number(maxBands) : null,
-    });
-    setPath("");
+    setPathLoading(true);
+    try {
+      const discovered = await listMeasurements(trimmedPath);
+      if (discovered.length === 0) {
+        alert("No measurement .hdr files found in that folder.");
+        return;
+      }
+      onQueueMeasurements(
+        discovered.map((measurement) => ({
+          id: createMeasurementId(),
+          name: getStem(measurement.name),
+          source: {
+            type: "path",
+            path: measurement.folder_path,
+            dataHdrName: measurement.data_hdr_name,
+          },
+        })),
+        buildOptions(),
+      );
+      setPath("");
+    } catch (error) {
+      alert(error.message || "Failed to scan measurement folder.");
+    } finally {
+      setPathLoading(false);
+    }
   };
 
   const queueFiles = (fileList) => {
     const files = Array.from(fileList || []);
-    if (files.length === 0) {
-      return;
-    }
-    onQueueMeasurements(groupFilesIntoMeasurements(files), {
-      ignoreDarkRef,
-      ignoreWhiteRef,
-      cropTop: cropTop.trim() ? Number(cropTop) : null,
-      cropBottom: cropBottom.trim() ? Number(cropBottom) : null,
-      cropLeft: cropLeft.trim() ? Number(cropLeft) : null,
-      cropRight: cropRight.trim() ? Number(cropRight) : null,
-      maxBands: maxBands.trim() ? Number(maxBands) : null,
-    });
+    if (files.length === 0) return;
+    onQueueMeasurements(groupMeasurementsFromFiles(files), buildOptions());
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -122,7 +218,7 @@ export default function DropZone({
       >
         <div className="measurement-dropzone__title">Drop dataset folders or files here</div>
         <div className="measurement-dropzone__subtitle">
-          You can queue multiple measurements without loading them immediately.
+          Each `.hdr` measurement in the dropped content is queued separately.
         </div>
         <div className="measurement-dropzone__actions">
           <button
@@ -190,7 +286,17 @@ export default function DropZone({
               type="number"
               min={0}
               value={cropTop}
-              onChange={(event) => setCropTop(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setCropTop(next);
+                pushOptionUpdate({
+                  cropTop: next,
+                  cropBottom,
+                  cropLeft,
+                  cropRight,
+                  maxBands,
+                });
+              }}
               className="field-input field-input--compact"
               placeholder="0"
             />
@@ -201,7 +307,17 @@ export default function DropZone({
               type="number"
               min={0}
               value={cropBottom}
-              onChange={(event) => setCropBottom(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setCropBottom(next);
+                pushOptionUpdate({
+                  cropTop,
+                  cropBottom: next,
+                  cropLeft,
+                  cropRight,
+                  maxBands,
+                });
+              }}
               className="field-input field-input--compact"
               placeholder="0"
             />
@@ -212,7 +328,17 @@ export default function DropZone({
               type="number"
               min={0}
               value={cropLeft}
-              onChange={(event) => setCropLeft(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setCropLeft(next);
+                pushOptionUpdate({
+                  cropTop,
+                  cropBottom,
+                  cropLeft: next,
+                  cropRight,
+                  maxBands,
+                });
+              }}
               className="field-input field-input--compact"
               placeholder="0"
             />
@@ -223,7 +349,17 @@ export default function DropZone({
               type="number"
               min={0}
               value={cropRight}
-              onChange={(event) => setCropRight(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setCropRight(next);
+                pushOptionUpdate({
+                  cropTop,
+                  cropBottom,
+                  cropLeft,
+                  cropRight: next,
+                  maxBands,
+                });
+              }}
               className="field-input field-input--compact"
               placeholder="0"
             />
@@ -234,20 +370,30 @@ export default function DropZone({
               type="number"
               min={1}
               value={maxBands}
-              onChange={(event) => setMaxBands(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setMaxBands(next);
+                pushOptionUpdate({
+                  cropTop,
+                  cropBottom,
+                  cropLeft,
+                  cropRight,
+                  maxBands: next,
+                });
+              }}
               className="field-input field-input--compact"
               placeholder="Full"
             />
           </label>
         </div>
         <div className="muted-text">
-          Spatial cropping trims exact pixel counts from each edge during load.
+          Spatial crop updates reload the active measurement and refresh the live image.
         </div>
       </div>
 
       <div className="measurement-sidebar__actions">
         <button type="button" className="btn btn-ghost" onClick={queuePathMeasurement}>
-          Queue path
+          {pathLoading ? "Scanning..." : "Queue path"}
         </button>
       </div>
 
@@ -256,14 +402,23 @@ export default function DropZone({
           <span>Measurements</span>
           <span className="muted-text">Double-click to load</span>
         </div>
-        <div className="measurement-listbox__body" role="listbox" aria-label="Measurements">
+        <div
+          className="measurement-listbox__body"
+          role="listbox"
+          aria-label="Measurements"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (!activeMeasurement) return;
+            if (event.key !== "Delete" && event.key !== "Backspace") return;
+            event.preventDefault();
+            onRemoveMeasurement(activeMeasurement.id);
+          }}
+        >
           {measurements.length === 0 && (
-            <div className="measurement-listbox__empty">
-              No measurements queued yet.
-            </div>
+            <div className="measurement-listbox__empty">No measurements queued yet.</div>
           )}
           {measurements.map((measurement) => {
-            const isActive = measurement.id === activeMeasurementId;
+            const isActive = measurement.id === activeMeasurement?.id;
             const status = measurement.isLoading
               ? "Loading..."
               : measurement.isLoaded
@@ -282,7 +437,9 @@ export default function DropZone({
               >
                 <span className="measurement-listbox__name">{measurement.name}</span>
                 <span className="measurement-listbox__meta">
-                  {measurement.shape ? `${measurement.shape[0]}x${measurement.shape[1]}x${measurement.shape[2]}` : status}
+                  {measurement.shape
+                    ? `${measurement.shape[0]}x${measurement.shape[1]}x${measurement.shape[2]}`
+                    : status}
                 </span>
               </button>
             );

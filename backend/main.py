@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, UploadFile, File
+from fastapi import FastAPI, Form, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hsi_loader import load_hsi, extract_rgb
@@ -8,6 +8,9 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import re
+from scipy.signal import savgol_filter
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 
 from fastapi import Request
 
@@ -21,6 +24,20 @@ app.add_middleware(
 )
 CUBE = None
 BANDS = None
+
+
+def _iter_measurement_hdrs(folder: Path) -> List[Path]:
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"Path not found: {folder}")
+    hdrs = []
+    for file_path in folder.iterdir():
+        if not file_path.is_file() or file_path.suffix.lower() != ".hdr":
+            continue
+        lower_name = file_path.name.lower()
+        if "darkref" in lower_name or "whiteref" in lower_name:
+            continue
+        hdrs.append(file_path)
+    return sorted(hdrs, key=lambda item: item.name.lower())
 
 
 def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
@@ -53,6 +70,195 @@ def _encode_rgb_image(image: np.ndarray) -> str:
     if not success:
         raise ValueError("Failed to encode RGB image")
     return buf.tobytes().hex()
+
+
+def _normalize_scalar_map(image: np.ndarray) -> np.ndarray:
+    array = np.asarray(image, dtype=np.float32)
+    if array.size == 0:
+        return np.zeros_like(array, dtype=np.float32)
+    finite_mask = np.isfinite(array)
+    if not np.any(finite_mask):
+        return np.zeros_like(array, dtype=np.float32)
+    finite_values = array[finite_mask]
+    min_val = float(np.min(finite_values))
+    max_val = float(np.max(finite_values))
+    if max_val - min_val < 1e-9:
+        return np.zeros_like(array, dtype=np.float32)
+    normalized = (array - min_val) / (max_val - min_val)
+    normalized[~finite_mask] = 0.0
+    return np.clip(normalized, 0.0, 1.0)
+
+
+def _encode_colormap_image(image: np.ndarray, colormap: int) -> str:
+    normalized = (_normalize_scalar_map(image) * 255.0).astype(np.uint8)
+    colored = cv2.applyColorMap(normalized, colormap)
+    rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+    return _encode_rgb_image(rgb)
+
+
+def _robust_limits(image: np.ndarray, percentiles=(1, 99)):
+    values = image[np.isfinite(image)]
+    if values.size == 0:
+        return 0.0, 1.0
+    return np.percentile(values, percentiles)
+
+
+def _percentile_stretch(image: np.ndarray, p_lo=1, p_hi=99, eps=1e-8):
+    values = image[np.isfinite(image)]
+    if values.size == 0:
+        return np.zeros_like(image, dtype=np.float32)
+    lo, hi = np.percentile(values, [p_lo, p_hi])
+    stretched = (image - lo) / (hi - lo + eps)
+    return np.clip(stretched, 0.0, 1.0).astype(np.float32)
+
+
+def _normalize_global(cube: np.ndarray):
+    cube = cube.astype(np.float32)
+    mn = np.nanmin(cube)
+    mx = np.nanmax(cube)
+    return (cube - mn) / (mx - mn + 1e-8)
+
+
+def _l2norm_rows(array: np.ndarray, eps=1e-12):
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
+    return array / (norms + eps)
+
+
+def _run_pca(cube: np.ndarray, n_components=3, standardize=False):
+    height, width, bands = cube.shape
+    pixels = cube.reshape(-1, bands)
+    finite = np.all(np.isfinite(pixels), axis=1)
+    x_fit = pixels[finite]
+    mean = x_fit.mean(axis=0)
+    centered = x_fit - mean
+    scale = None
+    if standardize:
+        scale = centered.std(axis=0, ddof=1)
+        scale[scale == 0] = 1
+        centered = centered / scale
+    pca = PCA(n_components=n_components, svd_solver="randomized", random_state=0)
+    pca.fit(centered)
+    x_all = pixels - mean
+    if standardize and scale is not None:
+        x_all = x_all / scale
+    scores = np.full((height * width, n_components), np.nan, dtype=np.float32)
+    scores[finite] = pca.transform(x_all[finite]).astype(np.float32)
+    return scores.reshape(height, width, n_components), pca
+
+
+def _pca_to_frgb(scores_img: np.ndarray, p_lo=1, p_hi=99, gamma=1.2):
+    rgb = np.stack(
+        [
+            _percentile_stretch(scores_img[..., 0], p_lo, p_hi),
+            _percentile_stretch(scores_img[..., 1], p_lo, p_hi),
+            _percentile_stretch(scores_img[..., 2], p_lo, p_hi),
+        ],
+        axis=-1,
+    )
+    return np.clip(rgb, 0.0, 1.0) ** (1.0 / gamma)
+
+
+def _find_endmembers_kmeans(cube: np.ndarray, k=6, sample_px=20000, random_state=0):
+    _, _, bands = cube.shape
+    pixels = cube.reshape(-1, bands)
+    if pixels.shape[0] > sample_px:
+        rng = np.random.default_rng(random_state)
+        indices = rng.choice(pixels.shape[0], sample_px, replace=False)
+        sample = pixels[indices]
+    else:
+        sample = pixels
+    sample = _l2norm_rows(sample)
+    km = KMeans(n_clusters=k, n_init=10, random_state=random_state)
+    km.fit(sample)
+    return km.cluster_centers_
+
+
+def _sam_distance_cube(cube: np.ndarray, endmembers: np.ndarray):
+    height, width, bands = cube.shape
+    pixels = cube.reshape(-1, bands)
+    x_norm = _l2norm_rows(pixels)
+    e_norm = _l2norm_rows(np.asarray(endmembers))
+    dots = np.clip(x_norm @ e_norm.T, -1.0, 1.0)
+    sam = np.arccos(dots)
+    return sam.reshape(height, width, e_norm.shape[0])
+
+
+def _sam_rgb_from_maps(sam_maps: np.ndarray, rgb_indices=(0, 1, 2), p_lo=1, p_hi=99):
+    r, g, b = rgb_indices
+    return np.stack(
+        [
+            _percentile_stretch(sam_maps[..., r], p_lo, p_hi),
+            _percentile_stretch(sam_maps[..., g], p_lo, p_hi),
+            _percentile_stretch(sam_maps[..., b], p_lo, p_hi),
+        ],
+        axis=-1,
+    )
+
+
+def _hard_class_from_sam(sam_maps: np.ndarray):
+    return np.nanargmin(sam_maps, axis=2)
+
+
+def _soft_abundance_from_sam(sam_maps: np.ndarray, tau=0.08, eps=1e-12):
+    logits = -sam_maps / max(tau, eps)
+    logits = logits - np.nanmax(logits, axis=2, keepdims=True)
+    expv = np.exp(logits)
+    return expv / (np.nansum(expv, axis=2, keepdims=True) + eps)
+
+
+def _abundance_rgb_from_abund(abundance: np.ndarray, em_indices=(0, 1, 2)):
+    r, g, b = em_indices
+    rgb = np.stack([abundance[..., r], abundance[..., g], abundance[..., b]], axis=-1)
+    return np.clip(rgb, 0.0, 1.0)
+
+
+def _ambiguity_margin_from_sam(sam_maps: np.ndarray):
+    sorted_maps = np.sort(sam_maps, axis=2)
+    return sorted_maps[..., 1] - sorted_maps[..., 0]
+
+
+def _compute_ratio_rgb(cube: np.ndarray):
+    bands = cube.shape[2]
+    idx_triplets = (
+        (max(0, min(bands - 1, 50)), max(0, min(bands - 1, 30))),
+        (max(0, min(bands - 1, 80)), max(0, min(bands - 1, 50))),
+        (max(0, min(bands - 1, bands - 1)), max(0, min(bands - 1, 80))),
+    )
+    (a1, b1), (a2, b2), (a3, b3) = idx_triplets
+    r1 = cube[..., a1] / (cube[..., b1] + 1e-8)
+    r2 = cube[..., a2] / (cube[..., b2] + 1e-8)
+    r3 = cube[..., a3] / (cube[..., b3] + 1e-8)
+    return np.stack(
+        [_percentile_stretch(r1), _percentile_stretch(r2), _percentile_stretch(r3)],
+        axis=-1,
+    )
+
+
+def _compute_entropy(cube: np.ndarray):
+    spec = cube / (np.sum(cube, axis=2, keepdims=True) + 1e-8)
+    return -np.sum(spec * np.log(spec + 1e-8), axis=2)
+
+
+def _compute_absorption_depth(cube: np.ndarray, window=11, poly=2):
+    bands = cube.shape[2]
+    window = max(3, min(window, bands if bands % 2 == 1 else bands - 1))
+    if window % 2 == 0:
+        window -= 1
+    poly = min(poly, window - 1)
+    smooth = savgol_filter(cube, window_length=window, polyorder=poly, axis=2)
+    return (smooth - cube).max(axis=2)
+
+
+def _compute_spectral_variance(cube: np.ndarray):
+    return np.var(cube, axis=2)
+
+
+def _kmeans_fit(pixels: np.ndarray, n_clusters: int, random_state: int = 0):
+    total_pixels = pixels.shape[0]
+    clusters = max(2, min(int(n_clusters), total_pixels))
+    km = KMeans(n_clusters=clusters, n_init=10, random_state=random_state)
+    labels = km.fit_predict(pixels)
+    return labels, km.cluster_centers_
 
 
 def _compute_pca_components(cube: np.ndarray, n_components: int) -> List[dict]:
@@ -114,31 +320,8 @@ def _compute_kmeans_segmentation(cube: np.ndarray, n_clusters: int):
     height, width, channels = cube.shape
     pixels = cube.reshape(-1, channels).astype(np.float32)
     total_pixels = pixels.shape[0]
-    clusters = max(2, min(int(n_clusters), total_pixels))
-    rng = np.random.default_rng(0)
-    initial_indices = rng.choice(total_pixels, size=clusters, replace=False)
-    centers = pixels[initial_indices]
-    pixel_norm = np.sum(pixels * pixels, axis=1, keepdims=True)
-
-    for _ in range(30):
-        center_norm = np.sum(centers * centers, axis=1)
-        distances = pixel_norm + center_norm - 2.0 * pixels @ centers.T
-        labels = np.argmin(distances, axis=1)
-        new_centers = np.zeros_like(centers)
-        for idx in range(clusters):
-            members = pixels[labels == idx]
-            if members.size == 0:
-                new_centers[idx] = pixels[rng.integers(0, total_pixels)]
-            else:
-                new_centers[idx] = members.mean(axis=0)
-        if np.allclose(new_centers, centers, atol=1e-4):
-            centers = new_centers
-            break
-        centers = new_centers
-
-    center_norm = np.sum(centers * centers, axis=1)
-    distances = pixel_norm + center_norm - 2.0 * pixels @ centers.T
-    labels = np.argmin(distances, axis=1)
+    labels, centers = _kmeans_fit(pixels, n_clusters)
+    clusters = centers.shape[0]
     label_image = labels.reshape(height, width)
 
     palette = _generate_palette(clusters)
@@ -172,6 +355,93 @@ def _compute_kmeans_segmentation(cube: np.ndarray, n_clusters: int):
         "cluster_summaries": summaries,
         "colors": palette.tolist(),
     }
+
+
+def _build_unsupervised_visuals(cube: np.ndarray):
+    cube = np.asarray(cube, dtype=np.float32)
+    cube = np.nan_to_num(cube, nan=0.0, posinf=0.0, neginf=0.0)
+
+    scores_img, pca = _run_pca(cube, n_components=3, standardize=False)
+    rgb_pca = _pca_to_frgb(scores_img, p_lo=1, p_hi=99, gamma=1.2)
+
+    endmembers = _find_endmembers_kmeans(cube, k=6, sample_px=20000, random_state=0)
+    sam_maps = _sam_distance_cube(cube, endmembers)
+    sam_rgb = _sam_rgb_from_maps(sam_maps, p_lo=1, p_hi=99, rgb_indices=(0, 1, 2))
+    hard_class = _hard_class_from_sam(sam_maps)
+    abundance = _soft_abundance_from_sam(sam_maps, tau=0.08)
+    abundance_rgb = _abundance_rgb_from_abund(abundance, em_indices=(0, 1, 2))
+    ambiguity = _ambiguity_margin_from_sam(sam_maps)
+
+    ratio_rgb = _compute_ratio_rgb(cube)
+    entropy = _compute_entropy(cube)
+    depth = _compute_absorption_depth(cube, window=11, poly=2)
+    var_map = _compute_spectral_variance(cube)
+
+    vibrant_scalar_maps = [
+        ("spectral-entropy", "Spectral Entropy", entropy, cv2.COLORMAP_MAGMA,
+         "Entropy of the normalized spectrum at each pixel."),
+        ("sam-ambiguity", "Ambiguity (2nd best - best SAM)", ambiguity, cv2.COLORMAP_VIRIDIS,
+         "Margin between the second-best and best SAM match."),
+        ("spectral-variance", "Spectral Variance", var_map, cv2.COLORMAP_PLASMA,
+         "Variance across the spectrum at each pixel."),
+        ("max-absorption-depth", "Max Absorption Depth", depth, cv2.COLORMAP_INFERNO,
+         "Maximum Savitzky-Golay absorption depth estimate."),
+    ]
+
+    visuals = [
+        {
+            "id": "pca-rgb",
+            "label": "PCA fRGB (PC1/2/3)",
+            "image": _encode_rgb_image((np.clip(rgb_pca, 0.0, 1.0) * 255.0).astype(np.uint8)),
+            "description": "False RGB composite from PCA scores 1 to 3 with percentile stretch and gamma.",
+        },
+        {
+            "id": "sam-rgb",
+            "label": "SAM Distance RGB",
+            "image": _encode_rgb_image((np.clip(sam_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)),
+            "description": "RGB composite of SAM distance maps for endmembers 0, 1, and 2.",
+        },
+        {
+            "id": "band-ratio-rgb",
+            "label": "Band Ratio Composite",
+            "image": _encode_rgb_image((np.clip(ratio_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)),
+            "description": "Three-band ratio composite with percentile stretch for contrast.",
+        },
+        {
+            "id": "sam-hard-class",
+            "label": "Hard Class (argmin SAM)",
+            "image": _encode_rgb_image(_generate_palette(endmembers.shape[0])[hard_class]),
+            "description": "Categorical endmember assignment from the minimum SAM value.",
+        },
+        {
+            "id": "sam-soft-rgb",
+            "label": "Soft Abundance RGB (EM0/1/2)",
+            "image": _encode_rgb_image((np.clip(abundance_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)),
+            "description": "Soft abundance RGB built from the first three SAM-based endmember memberships.",
+        },
+    ]
+
+    for idx in range(min(3, scores_img.shape[2])):
+        visuals.append(
+            {
+                "id": f"pca-component-{idx}",
+                "label": f"PCA Component {idx + 1}",
+                "image": _encode_colormap_image(scores_img[..., idx], cv2.COLORMAP_TURBO),
+                "description": f"Explained variance: {pca.explained_variance_ratio_[idx] * 100:.2f}%",
+            }
+        )
+
+    visuals.extend(
+        {
+            "id": visual_id,
+            "label": label,
+            "image": _encode_colormap_image(data, cmap),
+            "description": description,
+        }
+        for visual_id, label, data, cmap, description in vibrant_scalar_maps
+    )
+
+    return visuals
 
 
 def _normalize_rect(
@@ -479,6 +749,7 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
 async def load_dataset(
     folder_path: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
+    data_hdr_name: Optional[str] = Form(None),
     ignore_dark_ref: bool = Form(False),
     ignore_white_ref: bool = Form(False),
     crop_top: Optional[int] = Form(None),
@@ -516,7 +787,7 @@ async def load_dataset(
                 status_code=400,
             )
 
-        CUBE, BANDS, warning_text = load_hsi(
+        CUBE, BANDS, warning_text, data_file = load_hsi(
             load_target,
             ignore_dark_ref=bool(ignore_dark_ref),
             ignore_white_ref=bool(ignore_white_ref),
@@ -525,6 +796,7 @@ async def load_dataset(
             crop_left=crop_left,
             crop_right=crop_right,
             max_bands=max_bands,
+            data_hdr_name=data_hdr_name,
         )
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -534,10 +806,32 @@ async def load_dataset(
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    response = {"bands": BANDS, "shape": CUBE.shape}
+    response = {"bands": BANDS, "shape": CUBE.shape, "data_file": data_file}
     if warning_text:
         response["warning"] = warning_text
     return response
+
+
+@app.get("/measurements")
+def list_measurements(folder_path: str = Query(...)):
+    try:
+        folder = Path(folder_path)
+        hdrs = _iter_measurement_hdrs(folder)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to scan folder: {exc}"}, status_code=500)
+
+    return {
+        "measurements": [
+            {
+                "name": hdr.stem,
+                "data_hdr_name": hdr.name,
+                "folder_path": str(folder),
+            }
+            for hdr in hdrs
+        ]
+    }
 
 @app.get("/rgb")
 def get_rgb(r: int = 10, g: int = 20, b: int = 30):
@@ -614,6 +908,16 @@ async def run_analysis(req: Request):
                 status_code=500,
             )
         return {"method": "kmeans", **result}
+
+    if method == "unsupervised_suite":
+        try:
+            visuals = _build_unsupervised_visuals(CUBE)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to compute unsupervised visuals: {exc}"},
+                status_code=500,
+            )
+        return {"method": "unsupervised_suite", "visuals": visuals}
 
     return JSONResponse(
         {"error": f"Unsupported analysis method: {method or 'unknown'}"},
