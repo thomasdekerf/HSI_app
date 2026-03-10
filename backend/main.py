@@ -481,8 +481,10 @@ async def load_dataset(
     files: Optional[List[UploadFile]] = File(None),
     ignore_dark_ref: bool = Form(False),
     ignore_white_ref: bool = Form(False),
-    max_height: Optional[int] = Form(None),
-    max_width: Optional[int] = Form(None),
+    crop_top: Optional[int] = Form(None),
+    crop_bottom: Optional[int] = Form(None),
+    crop_left: Optional[int] = Form(None),
+    crop_right: Optional[int] = Form(None),
     max_bands: Optional[int] = Form(None),
 ):
     global CUBE, BANDS
@@ -518,8 +520,10 @@ async def load_dataset(
             load_target,
             ignore_dark_ref=bool(ignore_dark_ref),
             ignore_white_ref=bool(ignore_white_ref),
-            max_height=max_height,
-            max_width=max_width,
+            crop_top=crop_top,
+            crop_bottom=crop_bottom,
+            crop_left=crop_left,
+            crop_right=crop_right,
             max_bands=max_bands,
         )
     except FileNotFoundError as exc:

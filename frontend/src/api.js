@@ -15,11 +15,17 @@ export async function loadDataset(source, options = {}) {
 
   body.append("ignore_dark_ref", Boolean(options.ignoreDarkRef));
   body.append("ignore_white_ref", Boolean(options.ignoreWhiteRef));
-  if (options.maxHeight) {
-    body.append("max_height", String(options.maxHeight));
+  if (options.cropTop) {
+    body.append("crop_top", String(options.cropTop));
   }
-  if (options.maxWidth) {
-    body.append("max_width", String(options.maxWidth));
+  if (options.cropBottom) {
+    body.append("crop_bottom", String(options.cropBottom));
+  }
+  if (options.cropLeft) {
+    body.append("crop_left", String(options.cropLeft));
+  }
+  if (options.cropRight) {
+    body.append("crop_right", String(options.cropRight));
   }
   if (options.maxBands) {
     body.append("max_bands", String(options.maxBands));

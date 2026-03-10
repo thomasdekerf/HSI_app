@@ -92,6 +92,21 @@ def _normalize_uncalibrated_data(data: np.ndarray) -> np.ndarray:
     return np.clip(scaled, 0.0, 1.0, out=np.empty_like(array))
 
 
+def _crop_axis_by_edges(
+    length: int,
+    trim_start: Optional[int] = None,
+    trim_end: Optional[int] = None,
+) -> slice:
+    start = int(trim_start or 0)
+    end_trim = int(trim_end or 0)
+    if start < 0 or end_trim < 0:
+        raise ValueError("Crop edge values must be non-negative integers")
+    end = length - end_trim
+    if start >= end:
+        raise ValueError("Crop settings remove the full dataset extent")
+    return slice(start, end)
+
+
 def _crop_axis_to_size(length: int, max_length: Optional[int]) -> slice:
     if max_length is None:
         return slice(0, length)
@@ -108,12 +123,14 @@ def _crop_axis_to_size(length: int, max_length: Optional[int]) -> slice:
 def _apply_crop_limits(
     cube: np.ndarray,
     wavelengths: Optional[List[float]],
-    max_height: Optional[int] = None,
-    max_width: Optional[int] = None,
+    crop_top: Optional[int] = None,
+    crop_bottom: Optional[int] = None,
+    crop_left: Optional[int] = None,
+    crop_right: Optional[int] = None,
     max_bands: Optional[int] = None,
 ):
-    height_slice = _crop_axis_to_size(cube.shape[0], max_height)
-    width_slice = _crop_axis_to_size(cube.shape[1], max_width)
+    height_slice = _crop_axis_by_edges(cube.shape[0], crop_top, crop_bottom)
+    width_slice = _crop_axis_by_edges(cube.shape[1], crop_left, crop_right)
     band_slice = _crop_axis_to_size(cube.shape[2], max_bands)
 
     cropped_cube = cube[height_slice, width_slice, band_slice]
@@ -131,8 +148,10 @@ def load_hsi(
     input_path: str,
     ignore_dark_ref: bool = False,
     ignore_white_ref: bool = False,
-    max_height: Optional[int] = None,
-    max_width: Optional[int] = None,
+    crop_top: Optional[int] = None,
+    crop_bottom: Optional[int] = None,
+    crop_left: Optional[int] = None,
+    crop_right: Optional[int] = None,
     max_bands: Optional[int] = None,
 ):
     """
@@ -221,8 +240,10 @@ def load_hsi(
     corrected, wavelengths, crop_applied = _apply_crop_limits(
         corrected,
         wavelengths,
-        max_height=max_height,
-        max_width=max_width,
+        crop_top=crop_top,
+        crop_bottom=crop_bottom,
+        crop_left=crop_left,
+        crop_right=crop_right,
         max_bands=max_bands,
     )
     if crop_applied:

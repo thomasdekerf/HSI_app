@@ -33,8 +33,10 @@ export default function DropZone({
   const [path, setPath] = useState("");
   const [ignoreDarkRef, setIgnoreDarkRef] = useState(false);
   const [ignoreWhiteRef, setIgnoreWhiteRef] = useState(false);
-  const [maxHeight, setMaxHeight] = useState("");
-  const [maxWidth, setMaxWidth] = useState("");
+  const [cropTop, setCropTop] = useState("");
+  const [cropBottom, setCropBottom] = useState("");
+  const [cropLeft, setCropLeft] = useState("");
+  const [cropRight, setCropRight] = useState("");
   const [maxBands, setMaxBands] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
@@ -63,8 +65,10 @@ export default function DropZone({
     ], {
       ignoreDarkRef,
       ignoreWhiteRef,
-      maxHeight: maxHeight.trim() ? Number(maxHeight) : null,
-      maxWidth: maxWidth.trim() ? Number(maxWidth) : null,
+      cropTop: cropTop.trim() ? Number(cropTop) : null,
+      cropBottom: cropBottom.trim() ? Number(cropBottom) : null,
+      cropLeft: cropLeft.trim() ? Number(cropLeft) : null,
+      cropRight: cropRight.trim() ? Number(cropRight) : null,
       maxBands: maxBands.trim() ? Number(maxBands) : null,
     });
     setPath("");
@@ -78,8 +82,10 @@ export default function DropZone({
     onQueueMeasurements(groupFilesIntoMeasurements(files), {
       ignoreDarkRef,
       ignoreWhiteRef,
-      maxHeight: maxHeight.trim() ? Number(maxHeight) : null,
-      maxWidth: maxWidth.trim() ? Number(maxWidth) : null,
+      cropTop: cropTop.trim() ? Number(cropTop) : null,
+      cropBottom: cropBottom.trim() ? Number(cropBottom) : null,
+      cropLeft: cropLeft.trim() ? Number(cropLeft) : null,
+      cropRight: cropRight.trim() ? Number(cropRight) : null,
       maxBands: maxBands.trim() ? Number(maxBands) : null,
     });
     if (fileInputRef.current) {
@@ -176,28 +182,50 @@ export default function DropZone({
       </div>
 
       <div className="field-group">
-        <label className="field-label">Auto-crop limits</label>
+        <label className="field-label">Crop edges</label>
         <div className="crop-grid">
           <label className="field-group">
-            <span className="muted-text">Max height</span>
+            <span className="muted-text">Top</span>
             <input
               type="number"
-              min={1}
-              value={maxHeight}
-              onChange={(event) => setMaxHeight(event.target.value)}
+              min={0}
+              value={cropTop}
+              onChange={(event) => setCropTop(event.target.value)}
               className="field-input field-input--compact"
-              placeholder="Full"
+              placeholder="0"
             />
           </label>
           <label className="field-group">
-            <span className="muted-text">Max width</span>
+            <span className="muted-text">Bottom</span>
             <input
               type="number"
-              min={1}
-              value={maxWidth}
-              onChange={(event) => setMaxWidth(event.target.value)}
+              min={0}
+              value={cropBottom}
+              onChange={(event) => setCropBottom(event.target.value)}
               className="field-input field-input--compact"
-              placeholder="Full"
+              placeholder="0"
+            />
+          </label>
+          <label className="field-group">
+            <span className="muted-text">Left</span>
+            <input
+              type="number"
+              min={0}
+              value={cropLeft}
+              onChange={(event) => setCropLeft(event.target.value)}
+              className="field-input field-input--compact"
+              placeholder="0"
+            />
+          </label>
+          <label className="field-group">
+            <span className="muted-text">Right</span>
+            <input
+              type="number"
+              min={0}
+              value={cropRight}
+              onChange={(event) => setCropRight(event.target.value)}
+              className="field-input field-input--compact"
+              placeholder="0"
             />
           </label>
           <label className="field-group">
@@ -213,7 +241,7 @@ export default function DropZone({
           </label>
         </div>
         <div className="muted-text">
-          If set, the cube is center-cropped during load before viewing and analysis.
+          Spatial cropping trims exact pixel counts from each edge during load.
         </div>
       </div>
 
