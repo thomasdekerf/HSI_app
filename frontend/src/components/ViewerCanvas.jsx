@@ -83,6 +83,7 @@ export default function ViewerCanvas({
   regions = [],
   onRegion,
   maxWidth,
+  maxHeight,
   drawMode = "rectangle",
 }) {
   const [dragState, setDragState] = useState(null);
@@ -107,7 +108,7 @@ export default function ViewerCanvas({
   useEffect(() => {
     if (!img) return undefined;
     const updateSize = () => {
-      const { width, height, scale } = computeStageSize(img, { maxWidth });
+      const { width, height, scale } = computeStageSize(img, { maxWidth, maxHeight });
       setStageSize({ width, height });
       setDisplayScale(scale);
     };
@@ -117,7 +118,7 @@ export default function ViewerCanvas({
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [img, maxWidth]);
+  }, [img, maxWidth, maxHeight]);
 
   useEffect(() => {
     if (drawMode !== "polygon") {
