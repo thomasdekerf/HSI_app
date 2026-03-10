@@ -618,6 +618,33 @@ body {
   gap: 4px;
 }
 
+.spectra-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.spectra-series-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.spectra-series-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spectra-series-item__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .spectra-plot {
   flex: 1;
   min-height: 0;

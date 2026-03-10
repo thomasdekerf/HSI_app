@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import Plot from "react-plotly.js";
 import { hexToRgba } from "../utils/colors";
-import { exportSpectraCsv, toNumericBands } from "../utils/export";
+import { exportSpectraCsv, importSpectraCsv, toNumericBands } from "../utils/export";
+import { processSpectrum, SPECTRA_PROCESSING_OPTIONS } from "../utils/spectraProcessing";
 
 function toTraceBands(selection, fallbackBands) {
   const selectionBands = Array.isArray(selection?.bands) ? selection.bands : fallbackBands;
@@ -9,8 +10,18 @@ function toTraceBands(selection, fallbackBands) {
   return toNumericBands(selectionBands, fallbackLength);
 }
 
-export default function SpectraPlot({ bands, selections = [], currentSelections = [] }) {
+export default function SpectraPlot({
+  bands,
+  selections = [],
+  currentSelections = [],
+  onImportSelections,
+  onRenameSelection,
+}) {
   const [showStdDev, setShowStdDev] = useState(false);
+  const [processingMode, setProcessingMode] = useState("raw");
+  const [windowSize, setWindowSize] = useState(7);
+  const [polyOrder, setPolyOrder] = useState(2);
+  const fileInputRef = useRef(null);
 
   const traces = useMemo(() => {
     const items = [];
@@ -21,6 +32,11 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
       .forEach(({ selection, index }) => {
         const xValues = toTraceBands(selection, bands);
         const label = selection.label || `Region ${index + 1}`;
+        const processedSpectra = processSpectrum(selection.spectra, {
+          mode: processingMode,
+          windowSize,
+          polyOrder,
+        });
         const hasStd =
           showStdDev &&
           Array.isArray(selection.stddev) &&
@@ -54,7 +70,7 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
 
         items.push({
           x: xValues,
-          y: selection.spectra,
+          y: processedSpectra,
           mode: "lines",
           line: { color: selection.color, width: 2.5 },
           name: label,
@@ -62,7 +78,7 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
       });
 
     return items;
-  }, [bands, selections, showStdDev]);
+  }, [bands, selections, showStdDev, processingMode, windowSize, polyOrder]);
 
   const exportableSelections = useMemo(() => {
     const currentNumericBands = toNumericBands(
@@ -93,6 +109,19 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
     );
   };
 
+  const handleImport = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const imported = importSpectraCsv(text);
+    if (imported.length === 0) {
+      alert("No spectra could be imported from that CSV.");
+    } else if (typeof onImportSelections === "function") {
+      onImportSelections(imported);
+    }
+    event.target.value = "";
+  };
+
   if (traces.length === 0) {
     return (
       <div className="spectra-plot-card spectra-plot-card--empty">
@@ -109,6 +138,42 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
           <div className="muted-text">Legend is docked below the plot to preserve graph width.</div>
         </div>
         <div className="spectra-plot-card__actions">
+          <select
+            value={processingMode}
+            onChange={(event) => setProcessingMode(event.target.value)}
+            className="field-input field-input--select"
+          >
+            {SPECTRA_PROCESSING_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {(processingMode === "sg_smooth" || processingMode === "sg_first_derivative") && (
+            <>
+              <label className="spectra-control">
+                <span>Window</span>
+                <input
+                  type="number"
+                  min={3}
+                  step={2}
+                  value={windowSize}
+                  onChange={(event) => setWindowSize(Number(event.target.value) || 7)}
+                  className="field-input field-input--compact"
+                />
+              </label>
+              <label className="spectra-control">
+                <span>Poly</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={polyOrder}
+                  onChange={(event) => setPolyOrder(Number(event.target.value) || 2)}
+                  className="field-input field-input--compact"
+                />
+              </label>
+            </>
+          )}
           <button
             type="button"
             className="btn btn-ghost"
@@ -117,6 +182,16 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
           >
             Export current measurement CSV
           </button>
+          <button type="button" className="btn btn-ghost" onClick={() => fileInputRef.current?.click()}>
+            Import CSV
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="sr-only"
+            onChange={handleImport}
+          />
           <label className="checkbox-toggle">
             <input
               type="checkbox"
@@ -161,6 +236,22 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
         className="spectra-plot"
         style={{ width: "100%", height: "100%" }}
       />
+      <div className="spectra-series-list">
+        {selections.map((selection, index) => (
+          <label key={selection.id || `${selection.label}-${index}`} className="spectra-series-item">
+            <span
+              className="spectra-series-item__swatch"
+              style={{ backgroundColor: selection.color || "#0f6cbd" }}
+            />
+            <input
+              type="text"
+              value={selection.label || `Region ${index + 1}`}
+              onChange={(event) => onRenameSelection?.(selection.id, event.target.value)}
+              className="field-input"
+            />
+          </label>
+        ))}
+      </div>
     </div>
   );
 }

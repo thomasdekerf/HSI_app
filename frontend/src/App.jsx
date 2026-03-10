@@ -48,6 +48,7 @@ function measurementOptionSignature(options) {
 
 export default function App() {
   const [measurements, setMeasurements] = useState([]);
+  const [importedSelections, setImportedSelections] = useState([]);
   const [activeMeasurementId, setActiveMeasurementId] = useState(null);
   const [backendMeasurementId, setBackendMeasurementId] = useState(null);
   const [activeTab, setActiveTab] = useState("viewer");
@@ -63,15 +64,29 @@ export default function App() {
 
   const allSelections = useMemo(
     () =>
-      measurements.flatMap((measurement) =>
-        (measurement.selections || []).map((selection) => ({
+      [
+        ...measurements.flatMap((measurement) =>
+          (measurement.selections || []).map((selection) => ({
+            ...selection,
+            label:
+              selection.label ||
+              `${measurement.name || "Measurement"} Region ${(measurement.selections || []).findIndex((entry) => entry.id === selection.id) + 1}`,
+          })),
+        ),
+        ...importedSelections,
+      ],
+    [measurements, importedSelections],
+  );
+
+  const currentMeasurementSelections = useMemo(
+    () =>
+      (activeMeasurement?.selections || []).map((selection) => ({
           ...selection,
           label:
             selection.label ||
-            `${measurement.name || "Measurement"} Region ${(measurement.selections || []).findIndex((entry) => entry.id === selection.id) + 1}`,
+            `${activeMeasurement?.name || "Measurement"} Region ${(activeMeasurement?.selections || []).findIndex((entry) => entry.id === selection.id) + 1}`,
         })),
-      ),
-    [measurements],
+    [activeMeasurement],
   );
 
   const queueMeasurements = (entries, options) => {
@@ -216,6 +231,31 @@ export default function App() {
         ...measurement,
         selections: [],
       })),
+    );
+  };
+
+  const handleImportSelections = (entries) => {
+    const palette = ["#ff5f57", "#0078d4", "#0f9d58", "#a142f4", "#ff8c00", "#00b7c3"];
+    setImportedSelections((prev) => [
+      ...prev,
+      ...entries.map((entry, index) => ({
+        ...entry,
+        color: entry.color || palette[(prev.length + index) % palette.length],
+      })),
+    ]);
+  };
+
+  const handleRenameSelection = (selectionId, label) => {
+    setMeasurements((prev) =>
+      prev.map((measurement) => ({
+        ...measurement,
+        selections: (measurement.selections || []).map((selection) =>
+          selection.id === selectionId ? { ...selection, label } : selection,
+        ),
+      })),
+    );
+    setImportedSelections((prev) =>
+      prev.map((selection) => (selection.id === selectionId ? { ...selection, label } : selection)),
     );
   };
 
@@ -421,12 +461,15 @@ export default function App() {
                     onChange={handleIdxChange}
                     selections={activeMeasurement.selections}
                     allSelections={allSelections}
+                    currentSelections={currentMeasurementSelections}
                     onRegion={handleRegion}
                     onClearSelections={handleClearSelections}
                     derivedVisuals={activeMeasurement.analysisVisuals || []}
                     onRunSuite={handleRunSuite}
                     suiteLoading={suiteLoading}
                     suiteError={suiteError}
+                    onImportSelections={handleImportSelections}
+                    onRenameSelection={handleRenameSelection}
                   />
                 )}
               </div>

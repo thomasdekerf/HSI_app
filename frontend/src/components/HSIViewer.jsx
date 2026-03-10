@@ -30,12 +30,15 @@ export default function HSIViewer({
   onChange,
   selections = [],
   allSelections = [],
+  currentSelections = [],
   onRegion,
   onClearSelections,
   derivedVisuals = [],
   onRunSuite,
   suiteLoading,
   suiteError,
+  onImportSelections,
+  onRenameSelection,
 }) {
   const stageContainerRef = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
@@ -265,7 +268,13 @@ export default function HSIViewer({
             </div>
           </div>
         </header>
-        <SpectraPlot bands={bands} selections={allSelections} currentSelections={selections} />
+        <SpectraPlot
+          bands={bands}
+          selections={allSelections}
+          currentSelections={currentSelections}
+          onImportSelections={onImportSelections}
+          onRenameSelection={onRenameSelection}
+        />
       </section>
     </div>
   );
