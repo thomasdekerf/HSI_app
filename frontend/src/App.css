@@ -72,6 +72,12 @@ body {
   text-align: right;
 }
 
+.app-frame__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .app-workspace {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);
@@ -85,6 +91,10 @@ body {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+}
+
+.app-workspace.is-sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .card,
@@ -462,6 +472,29 @@ body {
   grid-template-columns: minmax(220px, 320px) minmax(260px, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.viewer-adjustments {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 16px;
+}
+
+.display-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #c8d1db;
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.display-sliders__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
 }
 
 .annotation-tools {
@@ -881,9 +914,19 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .viewer-adjustments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .app-frame__header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .app-frame__header-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .app-frame__status {

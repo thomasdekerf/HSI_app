@@ -106,7 +106,7 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
       <div className="spectra-plot-card__header">
         <div className="spectra-plot-card__header-copy">
           <div className="card__title">Spectral signatures</div>
-          <div className="muted-text">Legend is docked outside the figure for denser comparisons.</div>
+          <div className="muted-text">Legend is docked below the plot to preserve graph width.</div>
         </div>
         <div className="spectra-plot-card__actions">
           <button
@@ -131,7 +131,7 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
         data={traces}
         layout={{
           autosize: true,
-          margin: { t: 16, r: 210, l: 64, b: 60 },
+          margin: { t: 16, r: 32, l: 64, b: 140 },
           paper_bgcolor: "rgba(255,255,255,0)",
           plot_bgcolor: "rgba(255,255,255,0)",
           font: { family: "'Segoe UI', Tahoma, sans-serif", color: "#17202b" },
@@ -146,10 +146,10 @@ export default function SpectraPlot({ bands, selections = [], currentSelections 
             zeroline: false,
           },
           legend: {
-            orientation: "v",
-            x: 1.02,
+            orientation: "h",
+            x: 0,
             xanchor: "left",
-            y: 1,
+            y: -0.24,
             yanchor: "top",
             bgcolor: "rgba(255,255,255,0.72)",
             bordercolor: "rgba(23,32,43,0.12)",

@@ -29,9 +29,13 @@ export default function HSIViewer({
   const stageContainerRef = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
   const [drawMode, setDrawMode] = useState("rectangle");
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
 
   useEffect(() => {
     setDrawMode("rectangle");
+    setBrightness(100);
+    setContrast(100);
   }, [measurementName]);
 
   useEffect(() => {
@@ -86,6 +90,8 @@ export default function HSIViewer({
               onRegion={onRegion}
               maxWidth={stageWidth}
               maxHeight={760}
+              brightness={brightness}
+              contrast={contrast}
               drawMode={drawMode}
             />
           </div>
@@ -122,22 +128,66 @@ export default function HSIViewer({
               )}
             </div>
 
-            <div className="band-sliders">
-              {["R", "G", "B"].map((channel, index) => (
-                <div key={channel} className="band-sliders__item">
+            <div className="viewer-adjustments">
+              <div className="band-sliders">
+                {["R", "G", "B"].map((channel, index) => (
+                  <div key={channel} className="band-sliders__item">
+                    <label className="band-sliders__label">
+                      {channel}-band <span>{formatBandLabel(bands[idxs[index]])}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={bands.length - 1}
+                      value={idxs[index]}
+                      onChange={(event) => handleBandChange(index, event.target.value)}
+                      className="band-slider"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="display-sliders">
+                <div className="display-sliders__header">
+                  <span className="annotation-tools__label">Display tuning</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setBrightness(100);
+                      setContrast(100);
+                    }}
+                  >
+                    Reset image
+                  </button>
+                </div>
+                <div className="band-sliders__item">
                   <label className="band-sliders__label">
-                    {channel}-band <span>{formatBandLabel(bands[idxs[index]])}</span>
+                    Brightness <span>{brightness}%</span>
                   </label>
                   <input
                     type="range"
-                    min={0}
-                    max={bands.length - 1}
-                    value={idxs[index]}
-                    onChange={(event) => handleBandChange(index, event.target.value)}
+                    min={50}
+                    max={180}
+                    value={brightness}
+                    onChange={(event) => setBrightness(Number(event.target.value))}
                     className="band-slider"
                   />
                 </div>
-              ))}
+                <div className="band-sliders__item">
+                  <label className="band-sliders__label">
+                    Contrast <span>{contrast}%</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={50}
+                    max={200}
+                    value={contrast}
+                    onChange={(event) => setContrast(Number(event.target.value))}
+                    className="band-slider"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>

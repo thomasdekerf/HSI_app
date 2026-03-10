@@ -1,4 +1,7 @@
 import "konva/lib/shapes/Image";
+import "konva/lib/filters/Brighten";
+import "konva/lib/filters/Contrast";
+import Konva from "konva";
 import React, { useState, useEffect, useMemo } from "react";
 import { Stage, Layer, Rect, Image as KonvaImage, Circle, Line } from "react-konva";
 import { getShapeBounds } from "../utils/shapes";
@@ -84,6 +87,8 @@ export default function ViewerCanvas({
   onRegion,
   maxWidth,
   maxHeight,
+  brightness = 100,
+  contrast = 100,
   drawMode = "rectangle",
 }) {
   const [dragState, setDragState] = useState(null);
@@ -92,6 +97,7 @@ export default function ViewerCanvas({
   const [displayScale, setDisplayScale] = useState(1);
   const [polygonPoints, setPolygonPoints] = useState([]);
   const [pointerPosition, setPointerPosition] = useState(null);
+  const imageNodeRef = React.useRef(null);
 
   useEffect(() => {
     if (!imageUrl) {
@@ -126,6 +132,16 @@ export default function ViewerCanvas({
     }
     setDragState(null);
   }, [drawMode]);
+
+  useEffect(() => {
+    const imageNode = imageNodeRef.current;
+    if (!imageNode || !img) return;
+    imageNode.cache();
+    imageNode.filters([Konva.Filters.Brighten, Konva.Filters.Contrast]);
+    imageNode.brightness((Number(brightness) - 100) / 100);
+    imageNode.contrast(Number(contrast) - 100);
+    imageNode.getLayer()?.batchDraw();
+  }, [brightness, contrast, img]);
 
   const toImageCoordinates = (pos) => {
     if (!pos || !displayScale) return { x: 0, y: 0 };
@@ -345,7 +361,12 @@ export default function ViewerCanvas({
     >
       <Layer>
         {img && (
-          <KonvaImage image={img} width={stageSize.width} height={stageSize.height} />
+          <KonvaImage
+            ref={imageNodeRef}
+            image={img}
+            width={stageSize.width}
+            height={stageSize.height}
+          />
         )}
         {drawnRegions.map((region) => renderRegionShape(region))}
         {renderDraftShape()}

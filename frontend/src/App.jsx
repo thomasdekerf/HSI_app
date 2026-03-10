@@ -43,6 +43,7 @@ export default function App() {
   const [backendMeasurementId, setBackendMeasurementId] = useState(null);
   const [activeTab, setActiveTab] = useState("viewer");
   const [warning, setWarning] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const activeMeasurement = useMemo(
     () => measurements.find((measurement) => measurement.id === activeMeasurementId) || null,
@@ -255,19 +256,30 @@ export default function App() {
           <div className="app-frame__eyebrow">HSI Workstation</div>
           <h1 className="app-frame__title">InViLab Hyperspectral Analysis</h1>
         </div>
-        <div className="app-frame__status">
-          {activeMeasurementReady ? `Loaded: ${activeMeasurement.name}` : "No measurement loaded"}
+        <div className="app-frame__header-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+          >
+            {sidebarCollapsed ? "Show measurements" : "Hide measurements"}
+          </button>
+          <div className="app-frame__status">
+            {activeMeasurementReady ? `Loaded: ${activeMeasurement.name}` : "No measurement loaded"}
+          </div>
         </div>
       </header>
 
-      <main className="app-workspace">
-        <DropZone
-          measurements={measurements}
-          activeMeasurementId={activeMeasurementId}
-          onSelectMeasurement={setActiveMeasurementId}
-          onActivateMeasurement={handleActivateMeasurement}
-          onQueueMeasurements={queueMeasurements}
-        />
+      <main className={`app-workspace${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
+        {!sidebarCollapsed && (
+          <DropZone
+            measurements={measurements}
+            activeMeasurementId={activeMeasurementId}
+            onSelectMeasurement={setActiveMeasurementId}
+            onActivateMeasurement={handleActivateMeasurement}
+            onQueueMeasurements={queueMeasurements}
+          />
+        )}
 
         <section className="app-main">
           {warning && <div className="warning-banner">{warning}</div>}
