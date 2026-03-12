@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import DropZone from "./components/DropZone";
 import HSIViewer from "./components/HSIViewer";
 import SupervisedPanel from "./components/SupervisedPanel";
-import { getRGB, getSpectra, loadDataset, runAnalysis } from "./api";
+import { getRGB, getSpectra, loadDataset, runAnalysis, saveRoi } from "./api";
 import "./App.css";
 
 const EMPTY_LIST = [];
@@ -44,6 +44,12 @@ function measurementOptionSignature(options) {
     cropRight: options?.cropRight ?? null,
     maxBands: options?.maxBands ?? null,
   });
+}
+
+function isQueueableMeasurement(entry) {
+  const hdrName = String(entry?.source?.dataHdrName || "").trim();
+  const displayName = String(entry?.name || "").trim();
+  return Boolean(displayName && hdrName && hdrName.toLowerCase().endsWith(".hdr") && !hdrName.startsWith("."));
 }
 
 export default function App() {
@@ -90,7 +96,7 @@ export default function App() {
   );
 
   const queueMeasurements = (entries, options) => {
-    const prepared = entries.map((entry) => ({
+    const prepared = entries.filter(isQueueableMeasurement).map((entry) => ({
       ...entry,
       options: {
         ignoreDarkRef: Boolean(options?.ignoreDarkRef),
@@ -112,6 +118,8 @@ export default function App() {
       selections: [],
       loadedOptionSignature: "",
       analysisVisuals: [],
+      roiShape: null,
+      roiEnabled: false,
     }));
 
     setMeasurements((prev) => [...prev, ...prepared]);
@@ -155,6 +163,8 @@ export default function App() {
           name: data.data_file || entry.name,
           loadedOptionSignature: measurementOptionSignature(entry.options),
           analysisVisuals: [],
+          roiShape: data.roi_shape || null,
+          roiEnabled: Boolean(data.roi_shape),
         })),
       );
       setBackendMeasurementId(measurementId);
@@ -259,6 +269,17 @@ export default function App() {
     );
   };
 
+  const handleRemoveSelection = (selectionId) => {
+    if (!selectionId) return;
+    setMeasurements((prev) =>
+      prev.map((measurement) => ({
+        ...measurement,
+        selections: (measurement.selections || []).filter((selection) => selection.id !== selectionId),
+      })),
+    );
+    setImportedSelections((prev) => prev.filter((selection) => selection.id !== selectionId));
+  };
+
   const handleRunSuite = async () => {
     if (!activeMeasurement || activeMeasurement.id !== backendMeasurementId || suiteLoading) {
       return;
@@ -266,7 +287,9 @@ export default function App() {
     setSuiteLoading(true);
     setSuiteError("");
     try {
-      const result = await runAnalysis("unsupervised_suite");
+      const result = await runAnalysis("unsupervised_suite", {
+        roi_shape: activeMeasurement.roiEnabled ? activeMeasurement.roiShape || null : null,
+      });
       setMeasurements((prev) =>
         updateMeasurementById(prev, activeMeasurement.id, (measurement) => ({
           ...measurement,
@@ -290,8 +313,68 @@ export default function App() {
         },
         selections: [],
         analysisVisuals: [],
+        roiShape: null,
+        roiEnabled: false,
       })),
     );
+  };
+
+  const handleSetRoi = (shape) => {
+    if (!activeMeasurementId) return;
+    setMeasurements((prev) =>
+      updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
+        ...measurement,
+        roiShape: shape,
+        roiEnabled: true,
+        analysisVisuals: [],
+      })),
+    );
+    setSuiteError("");
+  };
+
+  const handleClearRoi = () => {
+    if (!activeMeasurementId) return;
+    setMeasurements((prev) =>
+      updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
+        ...measurement,
+        roiShape: null,
+        roiEnabled: false,
+        analysisVisuals: [],
+      })),
+    );
+    setSuiteError("");
+  };
+
+  const handleToggleRoi = () => {
+    if (!activeMeasurementId) return;
+    setMeasurements((prev) =>
+      updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
+        ...measurement,
+        roiEnabled: measurement.roiShape ? !measurement.roiEnabled : false,
+        analysisVisuals: [],
+      })),
+    );
+    setSuiteError("");
+  };
+
+  const handleSaveRoi = async () => {
+    if (!activeMeasurement?.roiShape) return;
+    const source = activeMeasurement.source;
+    if (source?.type !== "path" || !source.path || !source.dataHdrName) {
+      alert("ROI saving is only available for measurements loaded directly from a folder path.");
+      return;
+    }
+    try {
+      await saveRoi({
+        folderPath: source.path,
+        dataHdrName: source.dataHdrName,
+        shape: activeMeasurement.roiShape,
+      });
+      alert("ROI saved next to the measurement header.");
+    } catch (error) {
+      alert(error.message || "Failed to save ROI.");
+      return;
+    }
   };
 
   const handleRemoveMeasurement = (measurementId) => {
@@ -328,7 +411,9 @@ export default function App() {
     }
 
     let cancelled = false;
-    getRGB(idxs)
+    getRGB(idxs, {
+      roiShape: activeMeasurement?.roiEnabled ? activeMeasurement?.roiShape || null : null,
+    })
       .then((image) => {
         if (cancelled) return;
         setMeasurements((prev) =>
@@ -347,7 +432,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeBands, activeIdxs, activeMeasurementId, backendMeasurementId]);
+  }, [activeBands, activeIdxs, activeMeasurement?.roiEnabled, activeMeasurement?.roiShape, activeMeasurementId, backendMeasurementId]);
 
   useEffect(() => {
     if (
@@ -448,6 +533,7 @@ export default function App() {
                     onChange={handleIdxChange}
                     cubeShape={activeMeasurement.shape}
                     derivedVisuals={activeMeasurement.analysisVisuals || []}
+                    roiShape={activeMeasurement.roiShape || null}
                     onRunSuite={handleRunSuite}
                     suiteLoading={suiteLoading}
                     suiteError={suiteError}
@@ -470,6 +556,14 @@ export default function App() {
                     suiteError={suiteError}
                     onImportSelections={handleImportSelections}
                     onRenameSelection={handleRenameSelection}
+                    onRemoveSelection={handleRemoveSelection}
+                    roiShape={activeMeasurement.roiShape || null}
+                    roiEnabled={Boolean(activeMeasurement.roiEnabled && activeMeasurement.roiShape)}
+                    onSetRoi={handleSetRoi}
+                    onClearRoi={handleClearRoi}
+                    onToggleRoi={handleToggleRoi}
+                    onSaveRoi={handleSaveRoi}
+                    canSaveRoi={activeMeasurement.source?.type === "path"}
                   />
                 )}
               </div>

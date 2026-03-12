@@ -39,6 +39,14 @@ export default function HSIViewer({
   suiteError,
   onImportSelections,
   onRenameSelection,
+  onRemoveSelection,
+  roiShape = null,
+  roiEnabled = false,
+  onSetRoi,
+  onClearRoi,
+  onToggleRoi,
+  onSaveRoi,
+  canSaveRoi = false,
 }) {
   const stageContainerRef = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
@@ -47,12 +55,14 @@ export default function HSIViewer({
   const [contrast, setContrast] = useState(100);
   const [selectedViewId, setSelectedViewId] = useState("frgb");
   const [statusIndex, setStatusIndex] = useState(0);
+  const [interactionMode, setInteractionMode] = useState("annotate");
 
   useEffect(() => {
     setDrawMode("rectangle");
     setBrightness(100);
     setContrast(100);
     setSelectedViewId("frgb");
+    setInteractionMode("annotate");
   }, [measurementName]);
 
   useEffect(() => {
@@ -112,11 +122,33 @@ export default function HSIViewer({
     setSelectedViewId("frgb");
   }, [selectedView, viewEntries]);
 
-  const regions = selections.map((selection) => ({
-    id: selection.id,
-    shape: selection.shape || { type: "rectangle", ...selection.bounds },
-    color: selection.color,
-  }));
+  const regions = [
+    ...(roiShape
+      ? [
+          {
+            id: "roi-mask",
+            shape: roiShape,
+            color: roiEnabled ? "#00c7be" : "#7c8a96",
+          },
+        ]
+      : []),
+    ...selections.map((selection) => ({
+      id: selection.id,
+      shape: selection.shape || { type: "rectangle", ...selection.bounds },
+      color: selection.color,
+    })),
+  ];
+
+  const handleCanvasRegion = (shapeData) => {
+    if (interactionMode === "roi") {
+      if (shapeData?.shape && typeof onSetRoi === "function") {
+        onSetRoi(shapeData.shape);
+      }
+      setInteractionMode("annotate");
+      return;
+    }
+    onRegion?.(shapeData);
+  };
 
   return (
     <div className="viewer-workbench viewer-workbench--merged">
@@ -138,16 +170,64 @@ export default function HSIViewer({
             <ViewerCanvas
               imageUrl={selectedView?.imageUrl || null}
               regions={regions}
-              onRegion={onRegion}
+              onRegion={handleCanvasRegion}
               maxWidth={stageWidth}
               maxHeight={760}
               brightness={brightness}
               contrast={contrast}
-              drawMode={drawMode}
+              drawMode={interactionMode === "roi" ? "polygon" : drawMode}
             />
           </div>
 
           <div className="viewer-panel__controls viewer-panel__controls--merged">
+            <div className="display-sliders display-sliders--compact">
+              <div className="display-sliders__header">
+                <span className="annotation-tools__label">ROI preprocessing</span>
+              </div>
+              <div className="muted-text">
+                {roiShape
+                  ? roiEnabled
+                    ? "ROI is enabled. False-RGB and unsupervised views use only the selected lasso region."
+                    : "ROI is saved in memory but currently disabled."
+                  : "Optional: draw a lasso ROI to black out the background and rescale using only the ROI."}
+              </div>
+              <div className="annotation-tools__options">
+                <button
+                  type="button"
+                  className={`annotation-tools__button${interactionMode === "roi" ? " is-active" : ""}`}
+                  onClick={() => setInteractionMode((prev) => (prev === "roi" ? "annotate" : "roi"))}
+                >
+                  {interactionMode === "roi" ? "Drawing ROI" : "Lasso ROI"}
+                </button>
+                <button
+                  type="button"
+                  className={`annotation-tools__button${roiEnabled ? " is-active" : ""}`}
+                  onClick={onToggleRoi}
+                  disabled={!roiShape}
+                >
+                  {roiEnabled ? "ROI On" : "ROI Off"}
+                </button>
+                <button
+                  type="button"
+                  className="annotation-tools__button"
+                  onClick={onSaveRoi}
+                  disabled={!roiShape || !canSaveRoi}
+                >
+                  Save ROI
+                </button>
+                <button type="button" className="annotation-tools__button" onClick={onClearRoi} disabled={!roiShape}>
+                  Clear ROI
+                </button>
+              </div>
+              <div className="annotation-tools__hint">
+                {interactionMode === "roi"
+                  ? "Click to add lasso vertices and double-click to close the ROI."
+                  : canSaveRoi
+                    ? "ROI drawing is separate from spectral annotations. Save writes a sidecar ROI file next to the measurement header."
+                    : "ROI drawing is separate from spectral annotations. Saving is only available for measurements loaded from a folder path."}
+              </div>
+            </div>
+
             <div className="display-sliders display-sliders--compact">
               <div className="display-sliders__header">
                 <span className="annotation-tools__label">Annotation shape</span>
@@ -274,6 +354,7 @@ export default function HSIViewer({
           currentSelections={currentSelections}
           onImportSelections={onImportSelections}
           onRenameSelection={onRenameSelection}
+          onRemoveSelection={onRemoveSelection}
         />
       </section>
     </div>

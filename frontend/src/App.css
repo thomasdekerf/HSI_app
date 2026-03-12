@@ -593,6 +593,7 @@ body {
 
 .spectra-window {
   min-width: 420px;
+  min-height: 620px;
 }
 
 .spectra-plot-card {
@@ -600,7 +601,9 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  min-height: 560px;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
 }
 
 .spectra-plot-card--empty {
@@ -636,6 +639,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d3dae3;
+  border-radius: var(--radius-sm);
+  background: #fff;
 }
 
 .spectra-series-item__swatch {
@@ -645,9 +652,40 @@ body {
   flex-shrink: 0;
 }
 
+.spectra-series-item__label {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.spectra-series-item__input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.spectra-series-item__remove {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.spectra-series-item:hover .spectra-series-item__remove,
+.spectra-series-item:focus-within .spectra-series-item__remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .spectra-plot {
-  flex: 1;
-  min-height: 0;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 320px;
+  height: 100%;
+}
+
+.spectra-plot__canvas,
+.spectra-plot__canvas > div {
+  width: 100%;
+  height: 100%;
 }
 
 .form-error {

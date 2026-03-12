@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Plot from "react-plotly.js";
 import { hexToRgba } from "../utils/colors";
 import { exportSpectraCsv, importSpectraCsv, toNumericBands } from "../utils/export";
@@ -16,12 +16,29 @@ export default function SpectraPlot({
   currentSelections = [],
   onImportSelections,
   onRenameSelection,
+  onRemoveSelection,
 }) {
   const [showStdDev, setShowStdDev] = useState(false);
   const [processingMode, setProcessingMode] = useState("raw");
   const [windowSize, setWindowSize] = useState(7);
   const [polyOrder, setPolyOrder] = useState(2);
   const fileInputRef = useRef(null);
+  const plotContainerRef = useRef(null);
+  const [plotSize, setPlotSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!plotContainerRef.current) return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setPlotSize({
+        width: Math.max(0, Math.floor(entry.contentRect.width)),
+        height: Math.max(320, Math.floor(entry.contentRect.height)),
+      });
+    });
+    observer.observe(plotContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const traces = useMemo(() => {
     const items = [];
@@ -74,6 +91,7 @@ export default function SpectraPlot({
           mode: "lines",
           line: { color: selection.color, width: 2.5 },
           name: label,
+          showlegend: false,
         });
       });
 
@@ -135,7 +153,7 @@ export default function SpectraPlot({
       <div className="spectra-plot-card__header">
         <div className="spectra-plot-card__header-copy">
           <div className="card__title">Spectral signatures</div>
-          <div className="muted-text">Legend is docked below the plot to preserve graph width.</div>
+          <div className="muted-text">Rename spectra inline. Remove appears when you hover a series row.</div>
         </div>
         <div className="spectra-plot-card__actions">
           <select
@@ -202,43 +220,37 @@ export default function SpectraPlot({
           </label>
         </div>
       </div>
-      <Plot
-        data={traces}
-        layout={{
-          autosize: true,
-          margin: { t: 16, r: 32, l: 64, b: 140 },
-          paper_bgcolor: "rgba(255,255,255,0)",
-          plot_bgcolor: "rgba(255,255,255,0)",
-          font: { family: "'Segoe UI', Tahoma, sans-serif", color: "#17202b" },
-          xaxis: {
-            title: "Wavelength (nm)",
-            gridcolor: "rgba(23,32,43,0.1)",
-            zeroline: false,
-          },
-          yaxis: {
-            title: "Reflectance",
-            gridcolor: "rgba(23,32,43,0.1)",
-            zeroline: false,
-          },
-          legend: {
-            orientation: "h",
-            x: 0,
-            xanchor: "left",
-            y: -0.24,
-            yanchor: "top",
-            bgcolor: "rgba(255,255,255,0.72)",
-            bordercolor: "rgba(23,32,43,0.12)",
-            borderwidth: 1,
-          },
-        }}
-        config={{ displaylogo: false, responsive: true }}
-        useResizeHandler
-        className="spectra-plot"
-        style={{ width: "100%", height: "100%" }}
-      />
+      <div ref={plotContainerRef} className="spectra-plot">
+        <Plot
+          data={traces}
+          layout={{
+            autosize: false,
+            width: plotSize.width || undefined,
+            height: plotSize.height || undefined,
+            margin: { t: 16, r: 32, l: 64, b: 64 },
+            paper_bgcolor: "rgba(255,255,255,0)",
+            plot_bgcolor: "rgba(255,255,255,0)",
+            font: { family: "'Segoe UI', Tahoma, sans-serif", color: "#17202b" },
+            showlegend: false,
+            xaxis: {
+              title: "Wavelength (nm)",
+              gridcolor: "rgba(23,32,43,0.1)",
+              zeroline: false,
+            },
+            yaxis: {
+              title: "Reflectance",
+              gridcolor: "rgba(23,32,43,0.1)",
+              zeroline: false,
+            },
+          }}
+          config={{ displaylogo: false, responsive: true }}
+          className="spectra-plot__canvas"
+          style={{ width: "100%", height: "100%" }}
+        />
+      </div>
       <div className="spectra-series-list">
         {selections.map((selection, index) => (
-          <label key={selection.id || `${selection.label}-${index}`} className="spectra-series-item">
+          <div key={selection.id || `${selection.label}-${index}`} className="spectra-series-item">
             <span
               className="spectra-series-item__swatch"
               style={{ backgroundColor: selection.color || "#0f6cbd" }}
@@ -247,9 +259,17 @@ export default function SpectraPlot({
               type="text"
               value={selection.label || `Region ${index + 1}`}
               onChange={(event) => onRenameSelection?.(selection.id, event.target.value)}
-              className="field-input"
+              className="field-input spectra-series-item__input"
             />
-          </label>
+            <button
+              type="button"
+              className="btn btn-ghost btn--compact spectra-series-item__remove"
+              onClick={() => onRemoveSelection?.(selection.id)}
+              disabled={!selection.id}
+            >
+              Remove
+            </button>
+          </div>
         ))}
       </div>
     </div>

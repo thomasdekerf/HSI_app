@@ -9,6 +9,13 @@ function getStem(filename = "") {
   return filename.replace(/\.[^.]+$/, "");
 }
 
+function isValidMeasurementHdrName(filename = "") {
+  const trimmed = String(filename || "").trim();
+  if (!trimmed || trimmed.startsWith(".")) return false;
+  if (!trimmed.toLowerCase().endsWith(".hdr")) return false;
+  return getStem(trimmed).trim().length > 0;
+}
+
 function getParentKey(file) {
   const relativePath = file.webkitRelativePath || "";
   if (relativePath.includes("/")) {
@@ -36,18 +43,13 @@ function groupMeasurementsFromFiles(files) {
     const hdrFiles = groupFiles.filter((file) => {
       const lower = file.name.toLowerCase();
       return (
-        lower.endsWith(".hdr") &&
+        isValidMeasurementHdrName(file.name) &&
         !lower.includes("darkref") &&
         !lower.includes("whiteref")
       );
     });
 
     if (hdrFiles.length === 0) {
-      measurements.push({
-        id: createMeasurementId(),
-        name: getStem(groupFiles[0]?.name || `Measurement ${measurements.length + 1}`),
-        source: { type: "files", files: groupFiles },
-      });
       return;
     }
 
@@ -160,8 +162,7 @@ export default function DropZone({
         alert("No measurement .hdr files found in that folder.");
         return;
       }
-      onQueueMeasurements(
-        discovered.map((measurement) => ({
+      const queuedMeasurements = discovered.map((measurement) => ({
           id: createMeasurementId(),
           name: getStem(measurement.name),
           source: {
@@ -169,9 +170,12 @@ export default function DropZone({
             path: measurement.folder_path,
             dataHdrName: measurement.data_hdr_name,
           },
-        })),
-        buildOptions(),
-      );
+        })).filter((measurement) => isValidMeasurementHdrName(measurement.source?.dataHdrName) && measurement.name.trim());
+      if (queuedMeasurements.length === 0) {
+        alert("No valid measurement .hdr files found in that folder.");
+        return;
+      }
+      onQueueMeasurements(queuedMeasurements, buildOptions());
       setPath("");
     } catch (error) {
       alert(error.message || "Failed to scan measurement folder.");
@@ -183,7 +187,12 @@ export default function DropZone({
   const queueFiles = (fileList) => {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
-    onQueueMeasurements(groupMeasurementsFromFiles(files), buildOptions());
+    const measurements = groupMeasurementsFromFiles(files);
+    if (measurements.length === 0) {
+      alert("No measurement .hdr files found in the selected files or folders.");
+      return;
+    }
+    onQueueMeasurements(measurements, buildOptions());
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }

@@ -56,9 +56,15 @@ export async function loadDataset(source, options = {}) {
   return data;
 }
 
-export async function getRGB(idxs) {
-  const [r, g, b] = idxs;
-  const res = await fetch(`${API}/rgb?r=${r}&g=${g}&b=${b}`);
+export async function getRGB(idxs, options = {}) {
+  const res = await fetch(`${API}/rgb`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      indices: idxs,
+      roi_shape: options?.roiShape ?? null,
+    }),
+  });
   const data = await res.json();
   if (data.error) {
     throw new Error(data.error);
@@ -85,6 +91,23 @@ export async function runAnalysis(method, params = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  return data;
+}
+
+export async function saveRoi(payload) {
+  const res = await fetch(`${API}/roi`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      folder_path: payload?.folderPath || null,
+      data_hdr_name: payload?.dataHdrName || null,
+      shape: payload?.shape || null,
+    }),
   });
   const data = await res.json();
   if (data.error) {

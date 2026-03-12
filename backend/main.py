@@ -5,6 +5,7 @@ from hsi_loader import load_hsi, extract_rgb
 import numpy as np, cv2, tempfile, os
 import math
 import shutil
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import re
@@ -26,6 +27,31 @@ CUBE = None
 BANDS = None
 
 
+def _roi_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Path:
+    if not folder_path:
+        raise ValueError("Missing measurement folder path.")
+    if not data_hdr_name:
+        raise ValueError("Missing measurement header name.")
+    hdr_name = Path(data_hdr_name).name
+    stem = Path(hdr_name).stem
+    return Path(folder_path) / f"{stem}.roi.json"
+
+
+def _load_saved_roi(folder_path: Optional[str], data_hdr_name: Optional[str]) -> Optional[dict]:
+    if not folder_path or not data_hdr_name:
+        return None
+    roi_path = _roi_file_path(folder_path, data_hdr_name)
+    if not roi_path.exists():
+        return None
+    try:
+        with open(roi_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+    roi_shape = payload.get("shape")
+    return roi_shape if isinstance(roi_shape, dict) else None
+
+
 def _iter_measurement_hdrs(folder: Path) -> List[Path]:
     if not folder.exists() or not folder.is_dir():
         raise FileNotFoundError(f"Path not found: {folder}")
@@ -34,6 +60,9 @@ def _iter_measurement_hdrs(folder: Path) -> List[Path]:
         if not file_path.is_file() or file_path.suffix.lower() != ".hdr":
             continue
         lower_name = file_path.name.lower()
+        stem = file_path.stem.strip()
+        if not stem or file_path.name.startswith("."):
+            continue
         if "darkref" in lower_name or "whiteref" in lower_name:
             continue
         hdrs.append(file_path)
@@ -44,17 +73,24 @@ def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
     array = np.asarray(image, dtype=np.float32)
     if array.size == 0:
         return np.zeros_like(array, dtype=np.uint8)
-    min_val = np.nanmin(array)
-    max_val = np.nanmax(array)
+    finite_mask = np.isfinite(array)
+    if not np.any(finite_mask):
+        return np.zeros_like(array, dtype=np.uint8)
+    min_val = np.nanmin(array[finite_mask])
+    max_val = np.nanmax(array[finite_mask])
     if not np.isfinite(min_val) or not np.isfinite(max_val) or max_val - min_val < 1e-9:
         return np.zeros_like(array, dtype=np.uint8)
     scaled = (array - min_val) / (max_val - min_val)
+    scaled[~finite_mask] = 0.0
     scaled = np.clip(scaled * 255.0, 0, 255)
     return scaled.astype(np.uint8)
 
 
-def _encode_grayscale_image(image: np.ndarray) -> str:
-    scaled = _normalize_to_uint8(image)
+def _encode_grayscale_image(image: np.ndarray, valid_mask: Optional[np.ndarray] = None) -> str:
+    array = np.asarray(image, dtype=np.float32)
+    if valid_mask is not None:
+        array = np.where(valid_mask, array, np.nan)
+    scaled = _normalize_to_uint8(array)
     success, buf = cv2.imencode(".png", scaled)
     if not success:
         raise ValueError("Failed to encode grayscale image")
@@ -72,11 +108,15 @@ def _encode_rgb_image(image: np.ndarray) -> str:
     return buf.tobytes().hex()
 
 
-def _normalize_scalar_map(image: np.ndarray) -> np.ndarray:
+def _normalize_scalar_map(
+    image: np.ndarray, valid_mask: Optional[np.ndarray] = None
+) -> np.ndarray:
     array = np.asarray(image, dtype=np.float32)
     if array.size == 0:
         return np.zeros_like(array, dtype=np.float32)
     finite_mask = np.isfinite(array)
+    if valid_mask is not None:
+        finite_mask &= valid_mask.astype(bool)
     if not np.any(finite_mask):
         return np.zeros_like(array, dtype=np.float32)
     finite_values = array[finite_mask]
@@ -86,13 +126,19 @@ def _normalize_scalar_map(image: np.ndarray) -> np.ndarray:
         return np.zeros_like(array, dtype=np.float32)
     normalized = (array - min_val) / (max_val - min_val)
     normalized[~finite_mask] = 0.0
+    if valid_mask is not None:
+        normalized[~valid_mask.astype(bool)] = 0.0
     return np.clip(normalized, 0.0, 1.0)
 
 
-def _encode_colormap_image(image: np.ndarray, colormap: int) -> str:
-    normalized = (_normalize_scalar_map(image) * 255.0).astype(np.uint8)
+def _encode_colormap_image(
+    image: np.ndarray, colormap: int, valid_mask: Optional[np.ndarray] = None
+) -> str:
+    normalized = (_normalize_scalar_map(image, valid_mask=valid_mask) * 255.0).astype(np.uint8)
     colored = cv2.applyColorMap(normalized, colormap)
     rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+    if valid_mask is not None:
+        rgb[~valid_mask.astype(bool)] = 0
     return _encode_rgb_image(rgb)
 
 
@@ -103,13 +149,26 @@ def _robust_limits(image: np.ndarray, percentiles=(1, 99)):
     return np.percentile(values, percentiles)
 
 
-def _percentile_stretch(image: np.ndarray, p_lo=1, p_hi=99, eps=1e-8):
-    values = image[np.isfinite(image)]
+def _percentile_stretch(
+    image: np.ndarray,
+    p_lo=1,
+    p_hi=99,
+    eps=1e-8,
+    valid_mask: Optional[np.ndarray] = None,
+):
+    finite_mask = np.isfinite(image)
+    if valid_mask is not None:
+        finite_mask &= valid_mask.astype(bool)
+    values = image[finite_mask]
     if values.size == 0:
         return np.zeros_like(image, dtype=np.float32)
     lo, hi = np.percentile(values, [p_lo, p_hi])
     stretched = (image - lo) / (hi - lo + eps)
-    return np.clip(stretched, 0.0, 1.0).astype(np.float32)
+    stretched = np.clip(stretched, 0.0, 1.0).astype(np.float32)
+    stretched[~finite_mask] = 0.0
+    if valid_mask is not None:
+        stretched[~valid_mask.astype(bool)] = 0.0
+    return stretched
 
 
 def _normalize_global(cube: np.ndarray):
@@ -124,11 +183,20 @@ def _l2norm_rows(array: np.ndarray, eps=1e-12):
     return array / (norms + eps)
 
 
-def _run_pca(cube: np.ndarray, n_components=3, standardize=False):
+def _run_pca(
+    cube: np.ndarray,
+    n_components=3,
+    standardize=False,
+    roi_mask: Optional[np.ndarray] = None,
+):
     height, width, bands = cube.shape
     pixels = cube.reshape(-1, bands)
     finite = np.all(np.isfinite(pixels), axis=1)
+    if roi_mask is not None:
+        finite &= roi_mask.reshape(-1).astype(bool)
     x_fit = pixels[finite]
+    if x_fit.size == 0:
+        raise ValueError("ROI does not contain any valid pixels.")
     mean = x_fit.mean(axis=0)
     centered = x_fit - mean
     scale = None
@@ -146,21 +214,39 @@ def _run_pca(cube: np.ndarray, n_components=3, standardize=False):
     return scores.reshape(height, width, n_components), pca
 
 
-def _pca_to_frgb(scores_img: np.ndarray, p_lo=1, p_hi=99, gamma=1.2):
+def _pca_to_frgb(
+    scores_img: np.ndarray,
+    p_lo=1,
+    p_hi=99,
+    gamma=1.2,
+    roi_mask: Optional[np.ndarray] = None,
+):
     rgb = np.stack(
         [
-            _percentile_stretch(scores_img[..., 0], p_lo, p_hi),
-            _percentile_stretch(scores_img[..., 1], p_lo, p_hi),
-            _percentile_stretch(scores_img[..., 2], p_lo, p_hi),
+            _percentile_stretch(scores_img[..., 0], p_lo, p_hi, valid_mask=roi_mask),
+            _percentile_stretch(scores_img[..., 1], p_lo, p_hi, valid_mask=roi_mask),
+            _percentile_stretch(scores_img[..., 2], p_lo, p_hi, valid_mask=roi_mask),
         ],
         axis=-1,
     )
     return np.clip(rgb, 0.0, 1.0) ** (1.0 / gamma)
 
 
-def _find_endmembers_kmeans(cube: np.ndarray, k=6, sample_px=20000, random_state=0):
+def _find_endmembers_kmeans(
+    cube: np.ndarray,
+    k=6,
+    sample_px=20000,
+    random_state=0,
+    roi_mask: Optional[np.ndarray] = None,
+):
     _, _, bands = cube.shape
     pixels = cube.reshape(-1, bands)
+    finite = np.all(np.isfinite(pixels), axis=1)
+    if roi_mask is not None:
+        finite &= roi_mask.reshape(-1).astype(bool)
+    pixels = pixels[finite]
+    if pixels.size == 0:
+        raise ValueError("ROI does not contain any valid pixels.")
     if pixels.shape[0] > sample_px:
         rng = np.random.default_rng(random_state)
         indices = rng.choice(pixels.shape[0], sample_px, replace=False)
@@ -173,9 +259,14 @@ def _find_endmembers_kmeans(cube: np.ndarray, k=6, sample_px=20000, random_state
     return km.cluster_centers_
 
 
-def _sam_distance_cube(cube: np.ndarray, endmembers: np.ndarray):
+def _sam_distance_cube(
+    cube: np.ndarray, endmembers: np.ndarray, roi_mask: Optional[np.ndarray] = None
+):
     height, width, bands = cube.shape
     pixels = cube.reshape(-1, bands)
+    if roi_mask is not None:
+        roi_flat = roi_mask.reshape(-1).astype(bool)
+        pixels = np.where(roi_flat[:, None], pixels, np.nan)
     x_norm = _l2norm_rows(pixels)
     e_norm = _l2norm_rows(np.asarray(endmembers))
     dots = np.clip(x_norm @ e_norm.T, -1.0, 1.0)
@@ -183,13 +274,19 @@ def _sam_distance_cube(cube: np.ndarray, endmembers: np.ndarray):
     return sam.reshape(height, width, e_norm.shape[0])
 
 
-def _sam_rgb_from_maps(sam_maps: np.ndarray, rgb_indices=(0, 1, 2), p_lo=1, p_hi=99):
+def _sam_rgb_from_maps(
+    sam_maps: np.ndarray,
+    rgb_indices=(0, 1, 2),
+    p_lo=1,
+    p_hi=99,
+    roi_mask: Optional[np.ndarray] = None,
+):
     r, g, b = rgb_indices
     return np.stack(
         [
-            _percentile_stretch(sam_maps[..., r], p_lo, p_hi),
-            _percentile_stretch(sam_maps[..., g], p_lo, p_hi),
-            _percentile_stretch(sam_maps[..., b], p_lo, p_hi),
+            _percentile_stretch(sam_maps[..., r], p_lo, p_hi, valid_mask=roi_mask),
+            _percentile_stretch(sam_maps[..., g], p_lo, p_hi, valid_mask=roi_mask),
+            _percentile_stretch(sam_maps[..., b], p_lo, p_hi, valid_mask=roi_mask),
         ],
         axis=-1,
     )
@@ -217,7 +314,7 @@ def _ambiguity_margin_from_sam(sam_maps: np.ndarray):
     return sorted_maps[..., 1] - sorted_maps[..., 0]
 
 
-def _compute_ratio_rgb(cube: np.ndarray):
+def _compute_ratio_rgb(cube: np.ndarray, roi_mask: Optional[np.ndarray] = None):
     bands = cube.shape[2]
     idx_triplets = (
         (max(0, min(bands - 1, 50)), max(0, min(bands - 1, 30))),
@@ -229,7 +326,11 @@ def _compute_ratio_rgb(cube: np.ndarray):
     r2 = cube[..., a2] / (cube[..., b2] + 1e-8)
     r3 = cube[..., a3] / (cube[..., b3] + 1e-8)
     return np.stack(
-        [_percentile_stretch(r1), _percentile_stretch(r2), _percentile_stretch(r3)],
+        [
+            _percentile_stretch(r1, valid_mask=roi_mask),
+            _percentile_stretch(r2, valid_mask=roi_mask),
+            _percentile_stretch(r3, valid_mask=roi_mask),
+        ],
         axis=-1,
     )
 
@@ -357,25 +458,35 @@ def _compute_kmeans_segmentation(cube: np.ndarray, n_clusters: int):
     }
 
 
-def _build_unsupervised_visuals(cube: np.ndarray):
+def _build_unsupervised_visuals(cube: np.ndarray, roi_mask: Optional[np.ndarray] = None):
     cube = np.asarray(cube, dtype=np.float32)
     cube = np.nan_to_num(cube, nan=0.0, posinf=0.0, neginf=0.0)
+    if roi_mask is not None and not np.any(roi_mask):
+        raise ValueError("ROI does not contain any pixels.")
 
-    scores_img, pca = _run_pca(cube, n_components=3, standardize=False)
-    rgb_pca = _pca_to_frgb(scores_img, p_lo=1, p_hi=99, gamma=1.2)
+    scores_img, pca = _run_pca(cube, n_components=3, standardize=False, roi_mask=roi_mask)
+    rgb_pca = _pca_to_frgb(scores_img, p_lo=1, p_hi=99, gamma=1.2, roi_mask=roi_mask)
 
-    endmembers = _find_endmembers_kmeans(cube, k=6, sample_px=20000, random_state=0)
-    sam_maps = _sam_distance_cube(cube, endmembers)
-    sam_rgb = _sam_rgb_from_maps(sam_maps, p_lo=1, p_hi=99, rgb_indices=(0, 1, 2))
-    hard_class = _hard_class_from_sam(sam_maps)
+    endmembers = _find_endmembers_kmeans(cube, k=6, sample_px=20000, random_state=0, roi_mask=roi_mask)
+    sam_maps = _sam_distance_cube(cube, endmembers, roi_mask=roi_mask)
+    sam_rgb = _sam_rgb_from_maps(sam_maps, p_lo=1, p_hi=99, rgb_indices=(0, 1, 2), roi_mask=roi_mask)
+    safe_sam_maps = np.where(np.isfinite(sam_maps), sam_maps, np.inf)
+    hard_class = np.argmin(safe_sam_maps, axis=2)
     abundance = _soft_abundance_from_sam(sam_maps, tau=0.08)
     abundance_rgb = _abundance_rgb_from_abund(abundance, em_indices=(0, 1, 2))
     ambiguity = _ambiguity_margin_from_sam(sam_maps)
+    if roi_mask is not None:
+        abundance_rgb[~roi_mask] = 0.0
 
-    ratio_rgb = _compute_ratio_rgb(cube)
+    ratio_rgb = _compute_ratio_rgb(cube, roi_mask=roi_mask)
     entropy = _compute_entropy(cube)
     depth = _compute_absorption_depth(cube, window=11, poly=2)
     var_map = _compute_spectral_variance(cube)
+    if roi_mask is not None:
+        entropy = np.where(roi_mask, entropy, np.nan)
+        depth = np.where(roi_mask, depth, np.nan)
+        var_map = np.where(roi_mask, var_map, np.nan)
+        ambiguity = np.where(roi_mask, ambiguity, np.nan)
 
     vibrant_scalar_maps = [
         ("spectral-entropy", "Spectral Entropy", entropy, cv2.COLORMAP_MAGMA,
@@ -410,7 +521,13 @@ def _build_unsupervised_visuals(cube: np.ndarray):
         {
             "id": "sam-hard-class",
             "label": "Hard Class (argmin SAM)",
-            "image": _encode_rgb_image(_generate_palette(endmembers.shape[0])[hard_class]),
+            "image": _encode_rgb_image(
+                np.where(
+                    roi_mask[..., None] if roi_mask is not None else True,
+                    _generate_palette(endmembers.shape[0])[hard_class],
+                    0,
+                ).astype(np.uint8)
+            ),
             "description": "Categorical endmember assignment from the minimum SAM value.",
         },
         {
@@ -426,7 +543,7 @@ def _build_unsupervised_visuals(cube: np.ndarray):
             {
                 "id": f"pca-component-{idx}",
                 "label": f"PCA Component {idx + 1}",
-                "image": _encode_colormap_image(scores_img[..., idx], cv2.COLORMAP_TURBO),
+                "image": _encode_colormap_image(scores_img[..., idx], cv2.COLORMAP_TURBO, valid_mask=roi_mask),
                 "description": f"Explained variance: {pca.explained_variance_ratio_[idx] * 100:.2f}%",
             }
         )
@@ -435,7 +552,7 @@ def _build_unsupervised_visuals(cube: np.ndarray):
         {
             "id": visual_id,
             "label": label,
-            "image": _encode_colormap_image(data, cmap),
+            "image": _encode_colormap_image(data, cmap, valid_mask=roi_mask),
             "description": description,
         }
         for visual_id, label, data, cmap, description in vibrant_scalar_maps
@@ -496,6 +613,78 @@ def _extract_pixels_from_rect(
     return pixels, (x_start, x_end, y_start, y_end)
 
 
+def _shape_to_mask(shape: dict, width: int, height: int) -> np.ndarray:
+    if not isinstance(shape, dict):
+        raise ValueError("Invalid shape data")
+    shape_type = str(shape.get("type", "rectangle")).lower()
+    mask = np.zeros((height, width), dtype=bool)
+
+    if shape_type == "rectangle":
+        rect = {
+            "x0": shape.get("x0"),
+            "x1": shape.get("x1"),
+            "y0": shape.get("y0"),
+            "y1": shape.get("y1"),
+            "normalized": shape.get("normalized"),
+        }
+        x_start, x_end, y_start, y_end = _normalize_rect(rect, width, height)
+        mask[y_start:y_end, x_start:x_end] = True
+        return mask
+
+    if shape_type == "point":
+        x = shape.get("x", shape.get("cx"))
+        y = shape.get("y", shape.get("cy"))
+        if x is None or y is None:
+            raise ValueError("Invalid point coordinates")
+        x_idx = max(0, min(width - 1, int(round(float(x)))))
+        y_idx = max(0, min(height - 1, int(round(float(y)))))
+        mask[y_idx, x_idx] = True
+        return mask
+
+    if shape_type == "circle":
+        cx = shape.get("cx")
+        cy = shape.get("cy")
+        radius = shape.get("radius")
+        if None in (cx, cy, radius):
+            raise ValueError("Invalid circle definition")
+        cx = float(cx)
+        cy = float(cy)
+        radius = float(radius)
+        if radius <= 0:
+            raise ValueError("Circle radius must be positive")
+        yy, xx = np.ogrid[:height, :width]
+        mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+        if not np.any(mask):
+            raise ValueError("Empty selection")
+        return mask
+
+    if shape_type == "polygon":
+        points = shape.get("points")
+        if not isinstance(points, list) or len(points) < 3:
+            raise ValueError("Polygon requires at least three points")
+        coords = []
+        for point in points:
+            if isinstance(point, dict):
+                px = point.get("x")
+                py = point.get("y")
+            else:
+                px, py = point
+            if px is None or py is None:
+                continue
+            coords.append([float(px), float(py)])
+        if len(coords) < 3:
+            raise ValueError("Polygon requires at least three valid points")
+        polygon = np.round(np.array(coords, dtype=np.float32)).astype(np.int32)
+        raster = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(raster, [polygon], 1)
+        mask = raster.astype(bool)
+        if not np.any(mask):
+            raise ValueError("Empty selection")
+        return mask
+
+    raise ValueError(f"Unsupported shape type: {shape_type}")
+
+
 def _extract_pixels_from_shape(
     cube: np.ndarray, shape: dict
 ) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
@@ -503,6 +692,18 @@ def _extract_pixels_from_shape(
         raise ValueError("Invalid shape data")
     shape_type = str(shape.get("type", "rectangle")).lower()
     height, width = cube.shape[:2]
+    if shape_type in {"rectangle", "point", "circle", "polygon"}:
+        mask = _shape_to_mask(shape, width, height)
+        if not np.any(mask):
+            raise ValueError("Empty selection")
+        ys, xs = np.where(mask)
+        pixels = cube[mask]
+        if pixels.size == 0:
+            raise ValueError("Empty selection")
+        return (
+            pixels.reshape(-1, cube.shape[2]).astype(np.float32),
+            (int(xs.min()), int(xs.max()) + 1, int(ys.min()), int(ys.max()) + 1),
+        )
     if shape_type == "rectangle":
         rect = {
             "x0": shape.get("x0"),
@@ -584,6 +785,44 @@ def _extract_pixels_from_shape(
             raise ValueError("Empty selection")
         return pixels.reshape(-1, cube.shape[2]).astype(np.float32), (x_start, x_end, y_start, y_end)
     raise ValueError(f"Unsupported shape type: {shape_type}")
+
+
+def _extract_roi_mask(cube: np.ndarray, payload: Optional[dict]) -> Optional[np.ndarray]:
+    if not isinstance(payload, dict):
+        return None
+    shape = payload.get("shape") or payload.get("roi_shape")
+    rect = payload.get("rect") or payload.get("roi_rect")
+    height, width = cube.shape[:2]
+    if shape:
+        return _shape_to_mask(shape, width, height)
+    if rect:
+        x_start, x_end, y_start, y_end = _normalize_rect(rect, width, height)
+        mask = np.zeros((height, width), dtype=bool)
+        mask[y_start:y_end, x_start:x_end] = True
+        return mask
+    return None
+
+
+def _scale_rgb_with_roi(cube: np.ndarray, idxs: List[int], roi_mask: Optional[np.ndarray]) -> np.ndarray:
+    rgb = np.stack([cube[:, :, i] for i in idxs], axis=-1).astype(np.float32)
+    if roi_mask is None:
+        return np.clip(rgb, 0.0, 1.0)
+
+    scaled = np.zeros_like(rgb, dtype=np.float32)
+    for channel_idx in range(rgb.shape[2]):
+        channel = rgb[..., channel_idx]
+        finite_mask = np.isfinite(channel) & roi_mask
+        if not np.any(finite_mask):
+            continue
+        values = channel[finite_mask]
+        min_val = float(np.min(values))
+        max_val = float(np.max(values))
+        if max_val - min_val < 1e-9:
+            continue
+        scaled[..., channel_idx] = np.clip((channel - min_val) / (max_val - min_val), 0.0, 1.0)
+
+    scaled[~roi_mask] = 0.0
+    return scaled
 
 
 def _extract_region_pixels(
@@ -807,9 +1046,43 @@ async def load_dataset(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     response = {"bands": BANDS, "shape": CUBE.shape, "data_file": data_file}
+    if folder_path:
+        roi_shape = _load_saved_roi(folder_path, data_hdr_name or f"{data_file}.hdr")
+        if roi_shape is not None:
+            response["roi_shape"] = roi_shape
     if warning_text:
         response["warning"] = warning_text
     return response
+
+
+@app.post("/roi")
+async def save_roi(req: Request):
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload"}, status_code=400)
+
+    folder_path = payload.get("folder_path")
+    data_hdr_name = payload.get("data_hdr_name")
+    shape = payload.get("shape")
+
+    if not isinstance(shape, dict):
+        return JSONResponse({"error": "ROI shape is required."}, status_code=400)
+
+    if not folder_path or not data_hdr_name:
+        return JSONResponse(
+            {"error": "ROI saving is only available for measurements loaded from a folder path."},
+            status_code=400,
+        )
+
+    try:
+        roi_path = _roi_file_path(folder_path, data_hdr_name)
+        with open(roi_path, "w", encoding="utf-8") as handle:
+            json.dump({"shape": shape}, handle, indent=2)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to save ROI: {exc}"}, status_code=500)
+
+    return {"saved": True, "path": str(roi_path)}
 
 
 @app.get("/measurements")
@@ -833,12 +1106,40 @@ def list_measurements(folder_path: str = Query(...)):
         ]
     }
 
-@app.get("/rgb")
-def get_rgb(r: int = 10, g: int = 20, b: int = 30):
+@app.post("/rgb")
+async def get_rgb(req: Request):
     if CUBE is None:
         return JSONResponse({"error": "No cube loaded"}, status_code=400)
-    rgb = extract_rgb(CUBE, [r, g, b])
-    _, buf = cv2.imencode(".jpg", rgb)
+
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload"}, status_code=400)
+
+    idxs = payload.get("indices")
+    if not isinstance(idxs, list) or len(idxs) != 3:
+        return JSONResponse({"error": "RGB requires three band indices."}, status_code=400)
+
+    try:
+        rgb_indices = [int(value) for value in idxs]
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "RGB indices must be integers."}, status_code=400)
+
+    bands = CUBE.shape[2]
+    if any(index < 0 or index >= bands for index in rgb_indices):
+        return JSONResponse({"error": "RGB index is out of range."}, status_code=400)
+
+    try:
+        roi_mask = _extract_roi_mask(CUBE, payload)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    if roi_mask is None:
+        rgb = extract_rgb(CUBE, rgb_indices)
+    else:
+        rgb = (_scale_rgb_with_roi(CUBE, rgb_indices, roi_mask) * 255.0).astype(np.uint8)
+
+    _, buf = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     return {"image": buf.tobytes().hex()}
 
 
@@ -911,7 +1212,10 @@ async def run_analysis(req: Request):
 
     if method == "unsupervised_suite":
         try:
-            visuals = _build_unsupervised_visuals(CUBE)
+            roi_mask = _extract_roi_mask(CUBE, payload)
+            visuals = _build_unsupervised_visuals(CUBE, roi_mask=roi_mask)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
             return JSONResponse(
                 {"error": f"Failed to compute unsupervised visuals: {exc}"},

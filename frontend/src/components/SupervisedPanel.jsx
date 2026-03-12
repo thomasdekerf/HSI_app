@@ -53,6 +53,7 @@ export default function SupervisedPanel({
   onChange,
   cubeShape,
   derivedVisuals = [],
+  roiShape = null,
   onRunSuite,
   suiteLoading,
   suiteError,
@@ -258,8 +259,17 @@ export default function SupervisedPanel({
   }, [backgroundViews, selectedView]);
 
   const displayRegions = useMemo(
-    () =>
-      regions.map((region) => {
+    () => [
+      ...(roiShape
+        ? [
+            {
+              id: "roi-mask",
+              shape: roiShape,
+              color: "#00c7be",
+            },
+          ]
+        : []),
+      ...regions.map((region) => {
         const cls = classMap.get(region.classId);
         return {
           id: region.id,
@@ -267,7 +277,8 @@ export default function SupervisedPanel({
           color: cls ? cls.color : "#ff3b30",
         };
       }),
-    [regions, classMap],
+    ],
+    [regions, classMap, roiShape],
   );
 
   const classificationImage = useMemo(() => {
@@ -321,6 +332,11 @@ export default function SupervisedPanel({
             spectral signatures. Each class should include at least one region before running
             classification.
           </p>
+          {roiShape && (
+            <div className="notice">
+              ROI preprocessing is active on the background image and unsupervised views.
+            </div>
+          )}
 
           <form onSubmit={handleAddClass} className="class-form">
             <input
