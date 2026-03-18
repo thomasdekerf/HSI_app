@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DropZone from "./components/DropZone";
 import HSIViewer from "./components/HSIViewer";
 import SupervisedPanel from "./components/SupervisedPanel";
-import { getRGB, getSpectra, loadDataset, runAnalysis, saveRoi } from "./api";
+import { getRGB, getSpectra, loadDataset, runAnalysis, saveAnnotations, saveRoi } from "./api";
+import { getSeriesStyleByIndex, normalizeLineStyleId, normalizeSeriesColor } from "./utils/seriesStyles";
 import "./App.css";
 
 const EMPTY_LIST = [];
@@ -62,6 +63,13 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [suiteLoading, setSuiteLoading] = useState(false);
   const [suiteError, setSuiteError] = useState("");
+  const nextSeriesStyleIndexRef = useRef(0);
+
+  const claimSeriesStyleIndex = useCallback((count = 1) => {
+    const start = nextSeriesStyleIndexRef.current;
+    nextSeriesStyleIndexRef.current += Math.max(1, count);
+    return start;
+  }, []);
 
   const activeMeasurement = useMemo(
     () => measurements.find((measurement) => measurement.id === activeMeasurementId) || null,
@@ -165,6 +173,12 @@ export default function App() {
           analysisVisuals: [],
           roiShape: data.roi_shape || null,
           roiEnabled: Boolean(data.roi_shape),
+          selections: Array.isArray(data.annotations) && data.annotations.length > 0
+            ? data.annotations.map((selection) => ({
+                ...selection,
+                bands: parsedBands,
+              }))
+            : entry.selections,
         })),
       );
       setBackendMeasurementId(measurementId);
@@ -201,6 +215,7 @@ export default function App() {
 
     try {
       const data = await getSpectra(shapeData);
+      const styleIndex = claimSeriesStyleIndex();
       setMeasurements((prev) =>
         updateMeasurementById(prev, activeMeasurement.id, (measurement) => {
           const selectionCount = (measurement.selections || []).length;
@@ -208,16 +223,7 @@ export default function App() {
             id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
             shape: shapeData.shape,
             bounds: shapeData.bounds,
-            color: [
-              "#d13438",
-              "#c17c00",
-              "#107c10",
-              "#005a9e",
-              "#5c2d91",
-              "#8e562e",
-              "#c239b3",
-              "#0f6cbd",
-            ][selectionCount % 8],
+            ...getSeriesStyleByIndex(styleIndex),
             spectra: data.spectra,
             stddev: data.stddev || null,
             bands: measurement.bands,
@@ -245,13 +251,17 @@ export default function App() {
   };
 
   const handleImportSelections = (entries) => {
-    const palette = ["#ff5f57", "#0078d4", "#0f9d58", "#a142f4", "#ff8c00", "#00b7c3"];
+    const styleStart = claimSeriesStyleIndex(entries.length);
     setImportedSelections((prev) => [
       ...prev,
-      ...entries.map((entry, index) => ({
-        ...entry,
-        color: entry.color || palette[(prev.length + index) % palette.length],
-      })),
+      ...entries.map((entry, index) => {
+        const fallbackStyle = getSeriesStyleByIndex(styleStart + index);
+        return {
+          ...entry,
+          color: normalizeSeriesColor(entry.color, fallbackStyle.color),
+          lineStyle: normalizeLineStyleId(entry.lineStyle || fallbackStyle.lineStyle),
+        };
+      }),
     ]);
   };
 
@@ -278,6 +288,32 @@ export default function App() {
       })),
     );
     setImportedSelections((prev) => prev.filter((selection) => selection.id !== selectionId));
+  };
+
+  const handleUpdateSelectionStyle = (selectionId, updates) => {
+    if (!selectionId || !updates) return;
+    const normalizedUpdates = {};
+    if (Object.prototype.hasOwnProperty.call(updates, "color")) {
+      normalizedUpdates.color = normalizeSeriesColor(updates.color);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "lineStyle")) {
+      normalizedUpdates.lineStyle = normalizeLineStyleId(updates.lineStyle);
+    }
+    if (Object.keys(normalizedUpdates).length === 0) {
+      return;
+    }
+
+    setMeasurements((prev) =>
+      prev.map((measurement) => ({
+        ...measurement,
+        selections: (measurement.selections || []).map((selection) =>
+          selection.id === selectionId ? { ...selection, ...normalizedUpdates } : selection,
+        ),
+      })),
+    );
+    setImportedSelections((prev) =>
+      prev.map((selection) => (selection.id === selectionId ? { ...selection, ...normalizedUpdates } : selection)),
+    );
   };
 
   const handleRunSuite = async () => {
@@ -374,6 +410,32 @@ export default function App() {
     } catch (error) {
       alert(error.message || "Failed to save ROI.");
       return;
+    }
+  };
+
+  const handleSaveAnnotations = async () => {
+    if (!activeMeasurement) return;
+    const source = activeMeasurement.source;
+    if (source?.type !== "path" || !source.path || !source.dataHdrName) {
+      alert("Annotation saving is only available for measurements loaded directly from a folder path.");
+      return;
+    }
+    try {
+      await saveAnnotations({
+        folderPath: source.path,
+        dataHdrName: source.dataHdrName,
+        annotations: (activeMeasurement.selections || []).map((selection) => ({
+          id: selection.id,
+          label: selection.label,
+          color: selection.color,
+          lineStyle: selection.lineStyle,
+          shape: selection.shape || null,
+          bounds: selection.bounds || null,
+        })),
+      });
+      alert("Annotations saved next to the measurement header.");
+    } catch (error) {
+      alert(error.message || "Failed to save annotations.");
     }
   };
 
@@ -556,6 +618,7 @@ export default function App() {
                     suiteError={suiteError}
                     onImportSelections={handleImportSelections}
                     onRenameSelection={handleRenameSelection}
+                    onUpdateSelectionStyle={handleUpdateSelectionStyle}
                     onRemoveSelection={handleRemoveSelection}
                     roiShape={activeMeasurement.roiShape || null}
                     roiEnabled={Boolean(activeMeasurement.roiEnabled && activeMeasurement.roiShape)}
@@ -563,7 +626,9 @@ export default function App() {
                     onClearRoi={handleClearRoi}
                     onToggleRoi={handleToggleRoi}
                     onSaveRoi={handleSaveRoi}
+                    onSaveAnnotations={handleSaveAnnotations}
                     canSaveRoi={activeMeasurement.source?.type === "path"}
+                    canSaveAnnotations={activeMeasurement.source?.type === "path"}
                   />
                 )}
               </div>

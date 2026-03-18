@@ -5,6 +5,7 @@ import Konva from "konva";
 import React, { useState, useEffect, useMemo } from "react";
 import { Stage, Layer, Rect, Image as KonvaImage, Circle, Line } from "react-konva";
 import { getShapeBounds } from "../utils/shapes";
+import { getLineStyleDefinition } from "../utils/seriesStyles";
 
 function computeStageSize(image, constraints = {}) {
   if (!image) {
@@ -25,8 +26,8 @@ function computeStageSize(image, constraints = {}) {
     typeof constraints.maxHeight === "number" && constraints.maxHeight > 0
       ? constraints.maxHeight
       : viewportHeight - 220;
-  const maxWidth = Math.max(320, widthLimit);
-  const maxHeight = Math.max(320, heightLimit);
+  const maxWidth = Math.max(240, widthLimit);
+  const maxHeight = Math.max(180, heightLimit);
   const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
   return {
     width: image.width * scale,
@@ -85,11 +86,14 @@ export default function ViewerCanvas({
   imageUrl,
   regions = [],
   onRegion,
+  onZoomChange,
   maxWidth,
   maxHeight,
   brightness = 100,
   contrast = 100,
   drawMode = "rectangle",
+  zoomPercent = 100,
+  interactionEnabled = true,
 }) {
   const [dragState, setDragState] = useState(null);
   const [img, setImg] = useState(null);
@@ -98,6 +102,17 @@ export default function ViewerCanvas({
   const [polygonPoints, setPolygonPoints] = useState([]);
   const [pointerPosition, setPointerPosition] = useState(null);
   const imageNodeRef = React.useRef(null);
+
+  const handleWheel = (event) => {
+    if (typeof onZoomChange !== "function") return;
+    event.evt.preventDefault();
+    const direction = event.evt.deltaY > 0 ? -1 : 1;
+    const step = event.evt.shiftKey ? 5 : 10;
+    const nextZoom = Math.min(400, Math.max(50, zoomPercent + direction * step));
+    if (nextZoom !== zoomPercent) {
+      onZoomChange(nextZoom);
+    }
+  };
 
   useEffect(() => {
     if (!imageUrl) {
@@ -115,8 +130,9 @@ export default function ViewerCanvas({
     if (!img) return undefined;
     const updateSize = () => {
       const { width, height, scale } = computeStageSize(img, { maxWidth, maxHeight });
-      setStageSize({ width, height });
-      setDisplayScale(scale);
+      const zoomFactor = Math.max(0.25, Number(zoomPercent) / 100 || 1);
+      setStageSize({ width: width * zoomFactor, height: height * zoomFactor });
+      setDisplayScale(scale * zoomFactor);
     };
     updateSize();
     const handleResize = () => {
@@ -124,24 +140,25 @@ export default function ViewerCanvas({
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [img, maxWidth, maxHeight]);
+  }, [img, maxWidth, maxHeight, zoomPercent]);
 
   useEffect(() => {
-    if (drawMode !== "polygon") {
+    if (!interactionEnabled || drawMode !== "polygon") {
       setPolygonPoints([]);
     }
     setDragState(null);
-  }, [drawMode]);
+  }, [drawMode, interactionEnabled]);
 
   useEffect(() => {
     const imageNode = imageNodeRef.current;
     if (!imageNode || !img) return;
+    imageNode.clearCache();
     imageNode.cache();
     imageNode.filters([Konva.Filters.Brighten, Konva.Filters.Contrast]);
     imageNode.brightness((Number(brightness) - 100) / 100);
     imageNode.contrast(Number(contrast) - 100);
     imageNode.getLayer()?.batchDraw();
-  }, [brightness, contrast, img]);
+  }, [brightness, contrast, img, stageSize.height, stageSize.width]);
 
   const toImageCoordinates = (pos) => {
     if (!pos || !displayScale) return { x: 0, y: 0 };
@@ -162,7 +179,7 @@ export default function ViewerCanvas({
   };
 
   const handleMouseDown = (event) => {
-    if (!img) return;
+    if (!img || !interactionEnabled) return;
     const stage = event.target.getStage();
     if (!stage) return;
     const pos = stage.getPointerPosition();
@@ -191,12 +208,12 @@ export default function ViewerCanvas({
     if (pos) {
       setPointerPosition(pos);
     }
-    if (!dragState) return;
+    if (!interactionEnabled || !dragState) return;
     setDragState((state) => ({ ...state, current: pos || state.current }));
   };
 
   const handleMouseUp = () => {
-    if (!dragState || !img) return;
+    if (!interactionEnabled || !dragState || !img) return;
     const { start, current } = dragState;
     if (!start || !current) {
       setDragState(null);
@@ -227,7 +244,7 @@ export default function ViewerCanvas({
   };
 
   const handleDoubleClick = (event) => {
-    if (drawMode !== "polygon" || polygonPoints.length < 3 || !img) {
+    if (!interactionEnabled || drawMode !== "polygon" || polygonPoints.length < 3 || !img) {
       return;
     }
     event.evt.preventDefault();
@@ -249,6 +266,7 @@ export default function ViewerCanvas({
         return {
           id: region.id || region.key || Math.random().toString(16),
           color: region.color || "#ff3b30",
+          dash: Array.isArray(region.dash) ? region.dash : getLineStyleDefinition(region.lineStyle).canvasDash,
           shape: baseShape,
         };
       })
@@ -256,7 +274,7 @@ export default function ViewerCanvas({
   }, [regions]);
 
   const renderRegionShape = (region) => {
-    const { shape, color, id } = region;
+    const { shape, color, id, dash } = region;
     if (!shape) return null;
     const type = String(shape.type || "rectangle").toLowerCase();
     if (type === "rectangle") {
@@ -267,7 +285,7 @@ export default function ViewerCanvas({
       const width = Math.abs(bounds.x1 - bounds.x0) * displayScale;
       const height = Math.abs(bounds.y1 - bounds.y0) * displayScale;
       if (width <= 0 || height <= 0) return null;
-      return <Rect key={id} x={x} y={y} width={width} height={height} stroke={color} strokeWidth={2} />;
+      return <Rect key={id} x={x} y={y} width={width} height={height} stroke={color} strokeWidth={2} dash={dash} />;
     }
     if (type === "circle") {
       const cx = Number(shape.cx);
@@ -284,6 +302,7 @@ export default function ViewerCanvas({
           radius={Math.max(0, radius) * displayScale}
           stroke={color}
           strokeWidth={2}
+          dash={dash}
         />
       );
     }
@@ -292,7 +311,7 @@ export default function ViewerCanvas({
       const y = Number(shape.y ?? shape.cy ?? shape.y0);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
       return (
-        <Circle key={id} x={x * displayScale} y={y * displayScale} radius={4} fill={color} stroke={color} />
+        <Circle key={id} x={x * displayScale} y={y * displayScale} radius={4} fill={color} stroke={color} dash={dash} />
       );
     }
     if (type === "polygon") {
@@ -303,7 +322,7 @@ export default function ViewerCanvas({
         : [];
       if (points.length < 3) return null;
       const flatPoints = points.flatMap(([x, y]) => [x * displayScale, y * displayScale]);
-      return <Line key={id} points={flatPoints} stroke={color} strokeWidth={2} closed />;
+      return <Line key={id} points={flatPoints} stroke={color} strokeWidth={2} dash={dash} closed />;
     }
     return null;
   };
@@ -357,6 +376,7 @@ export default function ViewerCanvas({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onDblClick={handleDoubleClick}
+      onWheel={handleWheel}
       className="viewer-stage"
     >
       <Layer>

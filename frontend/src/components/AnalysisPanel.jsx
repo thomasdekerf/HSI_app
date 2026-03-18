@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { runAnalysis } from "../api";
 import { hexToBase64 } from "../utils/image";
+import { useDragPan } from "../utils/useDragPan";
 import ViewerCanvas from "./ViewerCanvas";
 import SpectraPlot from "./SpectraPlot";
 
@@ -10,6 +11,12 @@ const STATUS_STEPS = [
   "Computing ratio and entropy views",
   "Finishing contrast-enhanced descriptors",
 ];
+
+function clampZoomPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 100;
+  return Math.min(400, Math.max(50, numeric));
+}
 
 export default function AnalysisPanel({
   cubeShape,
@@ -24,8 +31,14 @@ export default function AnalysisPanel({
   const [error, setError] = useState("");
   const [statusIndex, setStatusIndex] = useState(0);
   const [drawMode, setDrawMode] = useState("rectangle");
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const [toolMode, setToolMode] = useState("draw");
+  const [viewportHeight, setViewportHeight] = useState(
+    typeof window !== "undefined" ? window.innerHeight : 900,
+  );
   const stageContainerRef = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
+  const { containerRef: panContainerRef, isDragging: isPanning, handleMouseDown: handlePanMouseDown } = useDragPan(toolMode === "pan");
 
   useEffect(() => {
     if (!stageContainerRef.current) return undefined;
@@ -46,6 +59,12 @@ export default function AnalysisPanel({
     }, 900);
     return () => window.clearInterval(timer);
   }, [loading]);
+
+  useEffect(() => {
+    const handleResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const availableVisuals = useMemo(
     () =>
@@ -75,6 +94,7 @@ export default function AnalysisPanel({
     id: selection.id,
     shape: selection.shape || { type: "rectangle", ...selection.bounds },
     color: selection.color,
+    lineStyle: selection.lineStyle,
   }));
 
   const handleRunAll = async () => {
@@ -91,6 +111,12 @@ export default function AnalysisPanel({
       setLoading(false);
     }
   };
+
+  const handleZoomChange = (value) => {
+    setZoomPercent(clampZoomPercent(value));
+  };
+
+  const stageMaxHeight = Math.max(220, viewportHeight - 430);
 
   return (
     <div className="analysis-workbench">
@@ -171,19 +197,36 @@ export default function AnalysisPanel({
             )}
           </header>
           <div className="viewer-window__body">
-            <div className="viewer-panel__stage" ref={stageContainerRef}>
+            <div
+              className={`viewer-panel__stage${toolMode === "pan" ? " is-pan-mode" : ""}${isPanning ? " is-pan-dragging" : ""}`}
+              ref={(node) => {
+                stageContainerRef.current = node;
+                panContainerRef.current = node;
+              }}
+              onMouseDownCapture={handlePanMouseDown}
+            >
               <ViewerCanvas
                 imageUrl={selectedVisual?.imageUrl || null}
                 regions={regions}
                 onRegion={onRegion}
+                onZoomChange={handleZoomChange}
                 maxWidth={stageWidth}
-                maxHeight={760}
+                maxHeight={Math.min(760, stageMaxHeight)}
                 drawMode={drawMode}
+                zoomPercent={zoomPercent}
+                interactionEnabled={toolMode !== "pan" && !isPanning}
               />
             </div>
             <div className="annotation-tools">
               <span className="annotation-tools__label">Annotation shape</span>
               <div className="annotation-tools__options">
+                <button
+                  type="button"
+                  className={`annotation-tools__button${toolMode === "pan" ? " is-active" : ""}`}
+                  onClick={() => setToolMode((prev) => (prev === "pan" ? "draw" : "pan"))}
+                >
+                  {toolMode === "pan" ? "Panning" : "Pan"}
+                </button>
                 {[
                   { id: "rectangle", label: "Rectangle" },
                   { id: "circle", label: "Circle" },
@@ -194,7 +237,10 @@ export default function AnalysisPanel({
                     key={option.id}
                     type="button"
                     className={`annotation-tools__button${drawMode === option.id ? " is-active" : ""}`}
-                    onClick={() => setDrawMode(option.id)}
+                    onClick={() => {
+                      setToolMode("draw");
+                      setDrawMode(option.id);
+                    }}
                   >
                     {option.label}
                   </button>
@@ -202,7 +248,7 @@ export default function AnalysisPanel({
               </div>
             </div>
             <div className="analysis-annotation-hint">
-              These annotations still extract spectra from the underlying hyperspectral cube.
+              These annotations still extract spectra from the underlying hyperspectral cube. Scroll over the image to zoom, hold Shift while scrolling for finer steps, and use Pan or Shift-drag for navigation.
             </div>
           </div>
         </section>

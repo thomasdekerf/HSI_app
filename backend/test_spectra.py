@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 import types
+import json
 from fastapi.testclient import TestClient
 
 
@@ -132,3 +133,65 @@ def test_rgb_endpoint_blacks_out_pixels_outside_roi():
     rgb = np.frombuffer(bytes.fromhex(res.json()["image"]), dtype=np.uint8)
     assert rgb.size == main.CUBE.shape[0] * main.CUBE.shape[1] * 3
     assert np.count_nonzero(rgb == 0) > 0
+
+
+def test_save_annotations_writes_labelme_style_sidecar(tmp_path):
+    payload = {
+        "folder_path": str(tmp_path),
+        "data_hdr_name": "scene.hdr",
+        "annotations": [
+            {
+                "id": "region-1",
+                "label": "Bottle cap",
+                "color": "#ff0000",
+                "lineStyle": "dash",
+                "shape": {
+                    "type": "rectangle",
+                    "x0": 0,
+                    "y0": 0,
+                    "x1": 2,
+                    "y1": 2,
+                },
+            }
+        ],
+    }
+    res = client.post("/annotations", json=payload)
+    assert res.status_code == 200
+    annotations_path = tmp_path / "scene.annotations.json"
+    assert annotations_path.exists()
+    saved = json.loads(annotations_path.read_text(encoding="utf-8"))
+    assert saved["imagePath"] == "scene.hdr"
+    assert saved["shapes"][0]["label"] == "Bottle cap"
+    assert saved["shapes"][0]["shape_type"] == "rectangle"
+
+
+def test_load_saved_annotations_rehydrates_spectra(tmp_path):
+    annotations_path = tmp_path / "scene.annotations.json"
+    annotations_path.write_text(
+        json.dumps(
+            {
+                "version": "5.0.1",
+                "imagePath": "scene.hdr",
+                "imageHeight": 4,
+                "imageWidth": 4,
+                "shapes": [
+                    {
+                        "label": "Test region",
+                        "points": [[0, 0], [2, 2]],
+                        "shape_type": "rectangle",
+                        "codex_id": "saved-1",
+                        "codex_color": "#00ff00",
+                        "codex_line_style": "dot",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = main._load_saved_annotations(str(tmp_path), "scene.hdr", main.CUBE)
+    assert len(loaded) == 1
+    assert loaded[0]["label"] == "Test region"
+    assert loaded[0]["color"] == "#00ff00"
+    assert loaded[0]["lineStyle"] == "dot"
+    assert loaded[0]["shape"]["type"] == "rectangle"
+    assert loaded[0]["bounds"] == {"x0": 0, "x1": 2, "y0": 0, "y1": 2}

@@ -5,3 +5,4 @@ numpy
 spectral
 python-multipart
 httpx
+matplotlib

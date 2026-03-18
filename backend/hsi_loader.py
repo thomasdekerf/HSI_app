@@ -8,7 +8,7 @@ import spectral.io.envi as envi
 def _iter_hdr_files(folder: Path):
     """Yield header files in ``folder`` ignoring the case of the extension."""
 
-    for file_path in folder.iterdir():
+    for file_path in folder.rglob("*"):
         if file_path.is_file() and file_path.suffix.lower() == ".hdr":
             yield file_path
 
@@ -21,6 +21,26 @@ def find_file(folder: Path, keyword: str):
         if keyword_lower in file_path.name.lower():
             return file_path
     return None
+
+
+def _select_data_hdr(root: Path, data_hdr_name: Optional[str] = None) -> Path:
+    hdrs = list(_iter_hdr_files(root))
+    normalized_target = None
+    if data_hdr_name:
+        normalized_target = data_hdr_name.lower()
+        if not normalized_target.endswith(".hdr"):
+            normalized_target = f"{normalized_target}.hdr"
+
+    for file_path in hdrs:
+        lower_name = file_path.name.lower()
+        if "darkref" in lower_name or "whiteref" in lower_name:
+            continue
+        if normalized_target is None or file_path.name.lower() == normalized_target:
+            return file_path
+
+    if data_hdr_name:
+        raise FileNotFoundError(f'Missing data .hdr file "{data_hdr_name}"')
+    raise FileNotFoundError("Missing data .hdr file")
 
 def _parse_wavelengths(values: Optional[Iterable]) -> Optional[List[float]]:
     """Normalize wavelength entries from ENVI metadata to a float list."""
@@ -169,32 +189,13 @@ def load_hsi(
     folder = path.parent if path.is_file() else path
 
     warnings_list = []
+    data_hdr = _select_data_hdr(folder, data_hdr_name=data_hdr_name)
+    measurement_folder = data_hdr.parent
 
-    # find hdr files
-    dark_hdr_original = find_file(folder, "darkref")
-    white_hdr_original = find_file(folder, "whiteref")
+    dark_hdr_original = find_file(measurement_folder, "darkref")
+    white_hdr_original = find_file(measurement_folder, "whiteref")
     dark_hdr = None if ignore_dark_ref else dark_hdr_original
     white_hdr = None if ignore_white_ref else white_hdr_original
-    data_hdr  = None
-
-    # choose data file (first hdr that is not ref, or the requested one)
-    hdrs = list(_iter_hdr_files(folder))
-    normalized_target = None
-    if data_hdr_name:
-        normalized_target = data_hdr_name.lower()
-        if not normalized_target.endswith(".hdr"):
-            normalized_target = f"{normalized_target}.hdr"
-    for f in hdrs:
-        if "darkref" in f.name.lower() or "whiteref" in f.name.lower():
-            continue
-        if normalized_target is None or f.name.lower() == normalized_target:
-            data_hdr = f
-            break
-
-    if data_hdr is None:
-        if data_hdr_name:
-            raise FileNotFoundError(f'Missing data .hdr file "{data_hdr_name}"')
-        raise FileNotFoundError("Missing data .hdr file")
 
     # corresponding raw file paths
     def raw_from_hdr(h): return h.with_suffix(".raw")
@@ -210,7 +211,7 @@ def load_hsi(
         ignored_parts.append("WHITEREF")
 
     if dark_hdr and white_hdr:
-        dark_ref  = np.array(envi.open(str(dark_hdr),  str(raw_from_hdr(dark_hdr))).load(), dtype=np.float32)
+        dark_ref = np.array(envi.open(str(dark_hdr), str(raw_from_hdr(dark_hdr))).load(), dtype=np.float32)
         white_ref = np.array(envi.open(str(white_hdr), str(raw_from_hdr(white_hdr))).load(), dtype=np.float32)
 
         dark_mean  = np.mean(dark_ref, axis=0)

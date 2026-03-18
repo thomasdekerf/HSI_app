@@ -24,16 +24,19 @@
 
 body {
   margin: 0;
+  font-size: 14px;
   font-family: var(--font-sans);
   color: var(--text-primary);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0)),
     var(--app-bg);
+  overflow: auto;
 }
 
 .app-root {
   min-height: 100vh;
-  padding: 18px;
+  padding: 14px;
+  overflow: visible;
 }
 
 .app-frame__header {
@@ -84,6 +87,7 @@ body {
   gap: 18px;
   margin-top: 18px;
   align-items: start;
+  min-height: calc(100vh - 104px);
 }
 
 .app-main {
@@ -91,6 +95,8 @@ body {
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+  min-height: 0;
+  overflow: visible;
 }
 
 .app-workspace.is-sidebar-collapsed {
@@ -122,13 +128,23 @@ body {
 }
 
 .measurement-sidebar {
-  position: sticky;
-  top: 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: calc(100vh - 36px);
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   background: linear-gradient(180deg, #f5f7fa, #e8edf3);
+}
+
+.measurement-sidebar__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .measurement-sidebar__header,
@@ -150,32 +166,6 @@ body {
   font-weight: 600;
 }
 
-.measurement-dropzone {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  border: 2px dashed #b9c3d0;
-  border-radius: var(--radius-md);
-  background: #fdfefe;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.measurement-dropzone.is-dragging {
-  border-color: var(--accent);
-  background: #f0f7ff;
-}
-
-.measurement-dropzone__title {
-  font-weight: 700;
-}
-
-.measurement-dropzone__subtitle {
-  color: var(--text-secondary);
-  line-height: 1.45;
-}
-
-.measurement-dropzone__actions,
 .measurement-sidebar__actions,
 .spectra-plot-card__actions,
 .analysis-viewer__controls,
@@ -280,17 +270,12 @@ body {
   gap: 8px;
 }
 
-.crop-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .measurement-listbox {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 260px;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .measurement-listbox__body {
@@ -301,8 +286,9 @@ body {
   border: 1px solid #b9c3d0;
   border-radius: var(--radius-md);
   background: #fff;
-  min-height: 260px;
-  max-height: 420px;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
   overflow: auto;
 }
 
@@ -390,6 +376,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
 }
 
 .tab-bar {
@@ -421,27 +408,32 @@ body {
 
 .panel-surface {
   min-width: 0;
+  min-height: 0;
+  overflow: visible;
 }
 
 .viewer-workbench {
   display: grid;
   grid-template-columns: minmax(640px, 1.45fr) minmax(420px, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
+  overflow: visible;
 }
 
 .viewer-workbench--merged {
-  grid-template-columns: minmax(0, 1.35fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.95fr);
 }
 
 .window-panel {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .window-panel__header {
-  padding: 14px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid #cdd5df;
   background: linear-gradient(180deg, #fdfefe, #edf1f5);
 }
@@ -454,23 +446,26 @@ body {
 
 .viewer-window,
 .spectra-window {
-  min-height: 620px;
-  resize: both;
-  overflow: auto;
+  min-height: 0;
+  overflow: visible;
 }
 
 .viewer-window__body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
+  gap: 10px;
+  padding: 10px;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .viewer-panel__stage {
   display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 520px;
+  justify-content: flex-start;
+  align-items: flex-start;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 8px;
   border: 1px solid #c7d0da;
   border-radius: var(--radius-md);
   background:
@@ -480,14 +475,30 @@ body {
     linear-gradient(-45deg, transparent 75%, #edf1f5 75%);
   background-size: 24px 24px;
   background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  overflow: auto;
+}
+
+.viewer-panel__stage.is-pan-mode {
+  cursor: grab;
+}
+
+.viewer-panel__stage.is-pan-dragging {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .viewer-panel__controls {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  flex-direction: row;
+  gap: 10px;
   align-items: start;
-  max-width: 420px;
+  width: 100%;
+  max-width: none;
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: min(32vh, 260px);
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .viewer-panel__controls--merged {
@@ -504,8 +515,8 @@ body {
 .display-sliders {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid #c8d1db;
   border-radius: var(--radius-md);
   background: #fff;
@@ -520,8 +531,8 @@ body {
 }
 
 .display-sliders--compact {
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 8px 10px;
 }
 
 .annotation-tools {
@@ -546,7 +557,7 @@ body {
 .annotation-tools__button {
   border: 1px solid #b4bfcb;
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: #fff;
   font: inherit;
   font-weight: 600;
@@ -591,9 +602,65 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
+.viewer-control-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+}
+
+.viewer-control-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.viewer-control-tab {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid #b8c3cf;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #eef3f8);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.viewer-control-tab svg {
+  width: 20px;
+  height: 20px;
+}
+
+.viewer-control-tab.is-active {
+  border-color: var(--accent);
+  background: #eaf4fd;
+  color: var(--accent-strong);
+}
+
+.viewer-control-panel {
+  min-height: 0;
+  align-self: stretch;
+  overflow: auto;
+}
+
+.window-panel__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.viewer-panel__controls .muted-text,
+.viewer-panel__controls .annotation-tools__hint {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
 .spectra-window {
   min-width: 420px;
-  min-height: 620px;
 }
 
 .spectra-plot-card {
@@ -652,6 +719,37 @@ body {
   flex-shrink: 0;
 }
 
+.spectra-series-item__swatch-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.spectra-series-item__color-picker {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #c6cfda;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.spectra-series-item__color-picker::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.spectra-series-item__color-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 999px;
+}
+
+.spectra-series-item__color-picker::-moz-color-swatch {
+  border: none;
+  border-radius: 999px;
+}
+
 .spectra-series-item__label {
   min-width: 0;
   flex: 1 1 auto;
@@ -661,6 +759,54 @@ body {
 .spectra-series-item__input {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.spectra-series-item__style-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spectra-series-item__style-icon {
+  position: relative;
+  width: 18px;
+  height: 10px;
+  display: inline-block;
+}
+
+.spectra-series-item__style-icon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 2px solid currentColor;
+}
+
+.spectra-series-item__style-icon--dash::before {
+  border-top-style: dashed;
+}
+
+.spectra-series-item__style-icon--dot::before {
+  border-top-style: dotted;
+}
+
+.spectra-series-item__style-icon--dashdot::before {
+  border-top: none;
+  height: 2px;
+  background:
+    linear-gradient(
+      90deg,
+      currentColor 0 6px,
+      transparent 6px 9px,
+      currentColor 9px 11px,
+      transparent 11px 14px,
+      currentColor 14px 18px
+    );
 }
 
 .spectra-series-item__remove {
@@ -678,7 +824,7 @@ body {
 .spectra-plot {
   position: relative;
   flex: 1 1 auto;
-  min-height: 320px;
+  min-height: 240px;
   height: 100%;
 }
 
@@ -851,6 +997,69 @@ body {
 
 .analysis-thumbnail-grid--viewer {
   width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+@media (max-height: 860px) {
+  .app-root {
+    padding: 10px;
+  }
+
+  .app-workspace {
+    margin-top: 10px;
+    gap: 12px;
+    height: calc(100vh - 88px);
+  }
+
+  .measurement-sidebar__body {
+    gap: 10px;
+  }
+
+  .viewer-window__body {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .window-panel__header {
+    padding: 8px 10px;
+  }
+
+  .viewer-control-tab {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .viewer-control-tab svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .display-sliders,
+  .display-sliders--compact {
+    padding: 7px 8px;
+    gap: 6px;
+  }
+
+  .viewer-panel__controls {
+    max-height: min(36vh, 220px);
+  }
+
+  .annotation-tools__button,
+  .btn,
+  .field-input {
+    font-size: 0.9rem;
+  }
+
+  .analysis-thumb__label,
+  .viewer-panel__controls .muted-text,
+  .viewer-panel__controls .annotation-tools__hint {
+    font-size: 0.8rem;
+  }
+
+  .spectra-plot {
+    min-height: 210px;
+  }
 }
 
 .analysis-empty {
@@ -971,6 +1180,9 @@ body {
 }
 
 .analysis-viewer__controls--zoom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   align-items: center;
 }
 

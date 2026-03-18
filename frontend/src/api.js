@@ -116,6 +116,23 @@ export async function saveRoi(payload) {
   return data;
 }
 
+export async function saveAnnotations(payload) {
+  const res = await fetch(`${API}/annotations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      folder_path: payload?.folderPath || null,
+      data_hdr_name: payload?.dataHdrName || null,
+      annotations: payload?.annotations || [],
+    }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  return data;
+}
+
 export async function runSupervisedClassification(payload) {
   const body = {
     method: payload?.method || "sam",

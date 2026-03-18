@@ -37,6 +37,16 @@ def _roi_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Path:
     return Path(folder_path) / f"{stem}.roi.json"
 
 
+def _annotations_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Path:
+    if not folder_path:
+        raise ValueError("Missing measurement folder path.")
+    if not data_hdr_name:
+        raise ValueError("Missing measurement header name.")
+    hdr_name = Path(data_hdr_name).name
+    stem = Path(hdr_name).stem
+    return Path(folder_path) / f"{stem}.annotations.json"
+
+
 def _load_saved_roi(folder_path: Optional[str], data_hdr_name: Optional[str]) -> Optional[dict]:
     if not folder_path or not data_hdr_name:
         return None
@@ -52,11 +62,133 @@ def _load_saved_roi(folder_path: Optional[str], data_hdr_name: Optional[str]) ->
     return roi_shape if isinstance(roi_shape, dict) else None
 
 
+def _shape_to_labelme_points(shape: dict) -> List[List[float]]:
+    shape_type = str(shape.get("type", "rectangle")).lower()
+    if shape_type == "rectangle":
+        return [
+            [float(shape.get("x0", 0)), float(shape.get("y0", 0))],
+            [float(shape.get("x1", 0)), float(shape.get("y1", 0))],
+        ]
+    if shape_type == "point":
+        return [[float(shape.get("x", shape.get("cx", 0))), float(shape.get("y", shape.get("cy", 0)))]]
+    if shape_type == "circle":
+        cx = float(shape.get("cx", 0))
+        cy = float(shape.get("cy", 0))
+        radius = float(shape.get("radius", 0))
+        return [[cx, cy], [cx + radius, cy]]
+    if shape_type == "polygon":
+        points = shape.get("points") or []
+        normalized = []
+        for point in points:
+            if isinstance(point, dict):
+                normalized.append([float(point.get("x", 0)), float(point.get("y", 0))])
+            else:
+                normalized.append([float(point[0]), float(point[1])])
+        return normalized
+    raise ValueError(f"Unsupported shape type: {shape_type}")
+
+
+def _shape_from_labelme(shape_payload: dict) -> dict:
+    shape_type = str(shape_payload.get("shape_type", "polygon")).lower()
+    points = shape_payload.get("points") or []
+    if shape_type == "rectangle" and len(points) >= 2:
+        return {
+            "type": "rectangle",
+            "x0": float(points[0][0]),
+            "y0": float(points[0][1]),
+            "x1": float(points[1][0]),
+            "y1": float(points[1][1]),
+        }
+    if shape_type == "point" and points:
+        return {
+            "type": "point",
+            "x": float(points[0][0]),
+            "y": float(points[0][1]),
+        }
+    if shape_type == "circle" and len(points) >= 2:
+        cx = float(points[0][0])
+        cy = float(points[0][1])
+        px = float(points[1][0])
+        py = float(points[1][1])
+        radius = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
+        return {"type": "circle", "cx": cx, "cy": cy, "radius": radius}
+    if shape_type == "polygon" and len(points) >= 3:
+        return {
+            "type": "polygon",
+            "points": [{"x": float(point[0]), "y": float(point[1])} for point in points],
+        }
+    raise ValueError(f"Unsupported or invalid saved shape type: {shape_type}")
+
+
+def _selection_to_label_shape(selection: dict) -> dict:
+    shape = selection.get("shape") or selection.get("rect")
+    if not isinstance(shape, dict):
+        raise ValueError("Each annotation must include a shape.")
+    shape_type = str(shape.get("type", "rectangle")).lower()
+    return {
+        "label": str(selection.get("label", "")).strip() or "Region",
+        "points": _shape_to_labelme_points(shape),
+        "group_id": None,
+        "shape_type": shape_type,
+        "flags": {},
+        "codex_id": selection.get("id"),
+        "codex_color": selection.get("color"),
+        "codex_line_style": selection.get("lineStyle"),
+    }
+
+
+def _compute_selection_summary(cube: np.ndarray, selection: dict) -> dict:
+    pixels, bounds = _extract_region_pixels(cube, selection)
+    if pixels.size == 0:
+        raise ValueError("Empty selection")
+    pixels = np.nan_to_num(pixels, nan=0.0, posinf=0.0, neginf=0.0)
+    x_start, x_end, y_start, y_end = bounds
+    return {
+        "bounds": {"x0": x_start, "x1": x_end, "y0": y_start, "y1": y_end},
+        "spectra": pixels.mean(axis=0).tolist(),
+        "stddev": np.nan_to_num(pixels.std(axis=0), nan=0.0, posinf=0.0, neginf=0.0).tolist(),
+    }
+
+
+def _load_saved_annotations(folder_path: Optional[str], data_hdr_name: Optional[str], cube: Optional[np.ndarray]) -> List[dict]:
+    if not folder_path or not data_hdr_name or cube is None:
+        return []
+    annotations_path = _annotations_file_path(folder_path, data_hdr_name)
+    if not annotations_path.exists():
+        return []
+    try:
+        with open(annotations_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return []
+
+    shapes = payload.get("shapes")
+    if not isinstance(shapes, list):
+        return []
+
+    loaded = []
+    for index, shape_payload in enumerate(shapes):
+        try:
+            shape = _shape_from_labelme(shape_payload)
+            selection = {
+                "id": shape_payload.get("codex_id") or f"saved-{index}",
+                "label": str(shape_payload.get("label", "")).strip() or f"Region {index + 1}",
+                "color": shape_payload.get("codex_color"),
+                "lineStyle": shape_payload.get("codex_line_style"),
+                "shape": shape,
+            }
+            summary = _compute_selection_summary(cube, selection)
+            loaded.append({**selection, **summary})
+        except Exception:
+            continue
+    return loaded
+
+
 def _iter_measurement_hdrs(folder: Path) -> List[Path]:
     if not folder.exists() or not folder.is_dir():
         raise FileNotFoundError(f"Path not found: {folder}")
     hdrs = []
-    for file_path in folder.iterdir():
+    for file_path in folder.rglob("*"):
         if not file_path.is_file() or file_path.suffix.lower() != ".hdr":
             continue
         lower_name = file_path.name.lower()
@@ -1050,6 +1182,9 @@ async def load_dataset(
         roi_shape = _load_saved_roi(folder_path, data_hdr_name or f"{data_file}.hdr")
         if roi_shape is not None:
             response["roi_shape"] = roi_shape
+        annotations = _load_saved_annotations(folder_path, data_hdr_name or f"{data_file}.hdr", CUBE)
+        if annotations:
+            response["annotations"] = annotations
     if warning_text:
         response["warning"] = warning_text
     return response
@@ -1085,6 +1220,48 @@ async def save_roi(req: Request):
     return {"saved": True, "path": str(roi_path)}
 
 
+@app.post("/annotations")
+async def save_annotations(req: Request):
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload"}, status_code=400)
+
+    folder_path = payload.get("folder_path")
+    data_hdr_name = payload.get("data_hdr_name")
+    annotations = payload.get("annotations")
+
+    if not folder_path or not data_hdr_name:
+        return JSONResponse(
+            {"error": "Annotation saving is only available for measurements loaded from a folder path."},
+            status_code=400,
+        )
+    if not isinstance(annotations, list):
+        return JSONResponse({"error": "Annotations must be a list."}, status_code=400)
+
+    try:
+        annotations_path = _annotations_file_path(folder_path, data_hdr_name)
+        serialized_shapes = [_selection_to_label_shape(annotation) for annotation in annotations]
+        image_height = int(CUBE.shape[0]) if isinstance(CUBE, np.ndarray) and CUBE.ndim >= 2 else None
+        image_width = int(CUBE.shape[1]) if isinstance(CUBE, np.ndarray) and CUBE.ndim >= 2 else None
+        payload = {
+            "version": "5.0.1",
+            "flags": {},
+            "imagePath": data_hdr_name,
+            "imageHeight": image_height,
+            "imageWidth": image_width,
+            "shapes": serialized_shapes,
+        }
+        with open(annotations_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to save annotations: {exc}"}, status_code=500)
+
+    return {"saved": True, "path": str(annotations_path), "count": len(annotations)}
+
+
 @app.get("/measurements")
 def list_measurements(folder_path: str = Query(...)):
     try:
@@ -1100,7 +1277,7 @@ def list_measurements(folder_path: str = Query(...)):
             {
                 "name": hdr.stem,
                 "data_hdr_name": hdr.name,
-                "folder_path": str(folder),
+                "folder_path": str(hdr.parent),
             }
             for hdr in hdrs
         ]

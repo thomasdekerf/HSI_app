@@ -3,11 +3,18 @@ import Plot from "react-plotly.js";
 import { hexToRgba } from "../utils/colors";
 import { exportSpectraCsv, importSpectraCsv, toNumericBands } from "../utils/export";
 import { processSpectrum, SPECTRA_PROCESSING_OPTIONS } from "../utils/spectraProcessing";
+import { getLineStyleDefinition, SERIES_LINE_STYLES } from "../utils/seriesStyles";
 
 function toTraceBands(selection, fallbackBands) {
   const selectionBands = Array.isArray(selection?.bands) ? selection.bands : fallbackBands;
   const fallbackLength = Array.isArray(selection?.spectra) ? selection.spectra.length : 0;
   return toNumericBands(selectionBands, fallbackLength);
+}
+
+function getNextLineStyleId(lineStyleId) {
+  const currentIndex = SERIES_LINE_STYLES.findIndex((style) => style.id === lineStyleId);
+  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % SERIES_LINE_STYLES.length : 0;
+  return SERIES_LINE_STYLES[nextIndex].id;
 }
 
 export default function SpectraPlot({
@@ -16,6 +23,7 @@ export default function SpectraPlot({
   currentSelections = [],
   onImportSelections,
   onRenameSelection,
+  onUpdateSelectionStyle,
   onRemoveSelection,
 }) {
   const [showStdDev, setShowStdDev] = useState(false);
@@ -49,6 +57,7 @@ export default function SpectraPlot({
       .forEach(({ selection, index }) => {
         const xValues = toTraceBands(selection, bands);
         const label = selection.label || `Region ${index + 1}`;
+        const lineStyle = getLineStyleDefinition(selection.lineStyle);
         const processedSpectra = processSpectrum(selection.spectra, {
           mode: processingMode,
           windowSize,
@@ -89,7 +98,7 @@ export default function SpectraPlot({
           x: xValues,
           y: processedSpectra,
           mode: "lines",
-          line: { color: selection.color, width: 2.5 },
+          line: { color: selection.color, width: 2.5, dash: lineStyle.plotlyDash },
           name: label,
           showlegend: false,
         });
@@ -153,7 +162,7 @@ export default function SpectraPlot({
       <div className="spectra-plot-card__header">
         <div className="spectra-plot-card__header-copy">
           <div className="card__title">Spectral signatures</div>
-          <div className="muted-text">Rename spectra inline. Remove appears when you hover a series row.</div>
+          <div className="muted-text">Rename spectra inline, adjust color and line style, and use the chart toolbar or mouse wheel to zoom.</div>
         </div>
         <div className="spectra-plot-card__actions">
           <select
@@ -232,6 +241,7 @@ export default function SpectraPlot({
             plot_bgcolor: "rgba(255,255,255,0)",
             font: { family: "'Segoe UI', Tahoma, sans-serif", color: "#17202b" },
             showlegend: false,
+            dragmode: "zoom",
             xaxis: {
               title: "Wavelength (nm)",
               gridcolor: "rgba(23,32,43,0.1)",
@@ -243,7 +253,13 @@ export default function SpectraPlot({
               zeroline: false,
             },
           }}
-          config={{ displaylogo: false, responsive: true }}
+          config={{
+            displaylogo: false,
+            responsive: true,
+            scrollZoom: true,
+            displayModeBar: true,
+            doubleClick: "reset+autosize",
+          }}
           className="spectra-plot__canvas"
           style={{ width: "100%", height: "100%" }}
         />
@@ -251,16 +267,38 @@ export default function SpectraPlot({
       <div className="spectra-series-list">
         {selections.map((selection, index) => (
           <div key={selection.id || `${selection.label}-${index}`} className="spectra-series-item">
-            <span
-              className="spectra-series-item__swatch"
-              style={{ backgroundColor: selection.color || "#0f6cbd" }}
-            />
+            <label className="spectra-series-item__swatch-label" title="Series color">
+              <input
+                type="color"
+                value={selection.color || "#0f6cbd"}
+                onChange={(event) => onUpdateSelectionStyle?.(selection.id, { color: event.target.value })}
+                className="spectra-series-item__color-picker"
+                disabled={!selection.id}
+              />
+            </label>
             <input
               type="text"
               value={selection.label || `Region ${index + 1}`}
               onChange={(event) => onRenameSelection?.(selection.id, event.target.value)}
               className="field-input spectra-series-item__input"
             />
+            <button
+              type="button"
+              className="btn btn-ghost btn--compact spectra-series-item__style-button"
+              disabled={!selection.id}
+              onClick={() =>
+                onUpdateSelectionStyle?.(selection.id, {
+                  lineStyle: getNextLineStyleId(selection.lineStyle || "solid"),
+                })
+              }
+              title={`Line style: ${getLineStyleDefinition(selection.lineStyle).label}. Click to change.`}
+              aria-label={`Cycle line style for ${selection.label || `Region ${index + 1}`}`}
+            >
+              <span
+                className={`spectra-series-item__style-icon spectra-series-item__style-icon--${selection.lineStyle || "solid"}`}
+                aria-hidden="true"
+              />
+            </button>
             <button
               type="button"
               className="btn btn-ghost btn--compact spectra-series-item__remove"
