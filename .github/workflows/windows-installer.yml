@@ -1,0 +1,85 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'packaging/windows/**'
+      - 'build_windows.bat'
+      - '.github/workflows/windows-installer.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'packaging/windows/**'
+      - 'build_windows.bat'
+      - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+          }
+      - name: Test and build the application and installer
+        shell: powershell
+        run: ./packaging/windows/build.ps1 -PythonExe (Get-Command python).Source
+      - name: Test installation, installed app, and uninstallation
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'HSI installed app'
+          $setup = (Resolve-Path 'dist/installer/HSI-App-Setup-0.1.0.exe').Path
+          $process = Start-Process $setup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $report = Join-Path $env:RUNNER_TEMP 'installed-smoke.json'
+          $app = Start-Process "$installDir/HSI-App.exe" -ArgumentList "--smoke-test `"$report`"" -PassThru
+          if (-not $app.WaitForExit(180000)) { Stop-Process $app.Id -Force; throw 'Installed app timed out.' }
+          $app.Refresh()
+          if ($app.ExitCode -ne 0 -or (Get-Content $report -Raw | ConvertFrom-Json).status -ne 'passed') {
+            Get-Content $report
+            throw 'Installed app smoke test failed.'
+          }
+          Copy-Item $report dist/installed-smoke-test.json
+          $uninstall = Start-Process "$installDir/unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0 -or (Test-Path "$installDir/HSI-App.exe")) { throw 'Uninstall failed.' }
+      - name: Upload installer and validation reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: HSI-App-Windows-installer
+          path: |
+            dist/installer/*
+            dist/*smoke-test.json
+            dist/build-environment.txt
+          if-no-files-found: error
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-build-diagnostics
+          path: |
+            dist/*smoke-test.json
+            build/hsi_app/warn-hsi_app.txt
+            ~/AppData/Local/HSI-App/logs/
+          if-no-files-found: ignore

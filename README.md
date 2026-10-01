@@ -1,3 +1,22 @@
+# HSI App
+
+## Windows installer
+
+To create a self-contained `HSI-App-Setup-0.1.0.exe`, follow
+[the Windows build instructions](packaging/windows/README.md).
+Install Python 3.12 x64, Node.js 22 or 24 LTS, and Inno Setup 6 on the build PC,
+then double-click **build_windows.bat** in the repository root.
+The script installs dependencies, runs tests, bundles the app, tests the executable,
+and creates the installer in `dist/installer/`.
+
+Installed users only need the installer and their measurement folders. Launching
+**HSI App** opens the local browser interface and a small launcher window. Keep
+the launcher open while working; use **Stop and exit** when finished.
+
+GitHub Actions also builds and tests the Windows installer, including a silent
+installation and uninstall. Download **HSI-App-Windows-installer** from a successful
+**Build Windows installer** run's artifacts.
+
 ## Loading IMEC and Specim measurements
 
 Paste a main folder into **Dataset folder path**, click **Queue path**, then double-click a measurement. The scan includes subfolders (including Specim `capture/` folders), so one queue can contain both IMEC and Specim scans. Reference files are excluded. The camera is detected from the ENVI header; other ENVI exports remain supported.
