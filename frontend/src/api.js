@@ -63,13 +63,14 @@ export async function getRGB(idxs, options = {}) {
     body: JSON.stringify({
       indices: idxs,
       roi_shape: options?.roiShape ?? null,
+      display: options?.display ?? null,
     }),
   });
   const data = await res.json();
   if (data.error) {
     throw new Error(data.error);
   }
-  return data.image;
+  return data;
 }
 
 export async function getSpectra(shapeData) {
@@ -125,6 +126,19 @@ export async function saveAnnotations(payload) {
       data_hdr_name: payload?.dataHdrName || null,
       annotations: payload?.annotations || [],
     }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  return data;
+}
+
+export async function saveRegistration(payload) {
+  const res = await fetch(`${API}/registration`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (data.error) {

@@ -132,3 +132,15 @@ export function importSpectraCsv(text) {
 
   return Array.from(seriesMap.values()).filter((entry) => Array.isArray(entry.spectra) && entry.spectra.length > 0);
 }
+
+export function exportJsonFile(filename, data) {
+  if (!filename || data === undefined) return;
+  const content = `${JSON.stringify(data, null, 2)}\n`;
+  const blob = new Blob([content], { type: "application/json;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}

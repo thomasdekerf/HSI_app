@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Form, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from hsi_loader import load_hsi, extract_rgb
+from hsi_loader import load_hsi, extract_rgb, measurement_headers, measurement_info
 import numpy as np, cv2, tempfile, os
 import math
 import shutil
@@ -27,6 +27,12 @@ CUBE = None
 BANDS = None
 
 
+def _default_display_mode(cube: np.ndarray) -> str:
+    sample = cube[::max(1, cube.shape[0] // 64), ::max(1, cube.shape[1] // 64), :]
+    finite = sample[np.isfinite(sample)]
+    return "channel" if finite.size and (finite.min() < 0 or finite.max() > 1) else "clip"
+
+
 def _roi_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Path:
     if not folder_path:
         raise ValueError("Missing measurement folder path.")
@@ -45,6 +51,16 @@ def _annotations_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Pa
     hdr_name = Path(data_hdr_name).name
     stem = Path(hdr_name).stem
     return Path(folder_path) / f"{stem}.annotations.json"
+
+
+def _registration_file_path(folder_path: str, data_hdr_name: Optional[str]) -> Path:
+    if not folder_path:
+        raise ValueError("Missing measurement folder path.")
+    if not data_hdr_name:
+        raise ValueError("Missing measurement header name.")
+    hdr_name = Path(data_hdr_name).name
+    stem = Path(hdr_name).stem
+    return Path(folder_path) / f"{stem}.registration.json"
 
 
 def _load_saved_roi(folder_path: Optional[str], data_hdr_name: Optional[str]) -> Optional[dict]:
@@ -184,21 +200,22 @@ def _load_saved_annotations(folder_path: Optional[str], data_hdr_name: Optional[
     return loaded
 
 
+def _normalize_folder_path(folder_path: str) -> str:
+    """Accept paths pasted with surrounding whitespace or matching quotes."""
+    folder_path = folder_path.strip()
+    if (
+        len(folder_path) >= 2
+        and folder_path[0] in ("'", '"')
+        and folder_path[-1] == folder_path[0]
+    ):
+        folder_path = folder_path[1:-1]
+    return str(Path(folder_path).expanduser()) if folder_path else ""
+
+
 def _iter_measurement_hdrs(folder: Path) -> List[Path]:
     if not folder.exists() or not folder.is_dir():
         raise FileNotFoundError(f"Path not found: {folder}")
-    hdrs = []
-    for file_path in folder.rglob("*"):
-        if not file_path.is_file() or file_path.suffix.lower() != ".hdr":
-            continue
-        lower_name = file_path.name.lower()
-        stem = file_path.stem.strip()
-        if not stem or file_path.name.startswith("."):
-            continue
-        if "darkref" in lower_name or "whiteref" in lower_name:
-            continue
-        hdrs.append(file_path)
-    return sorted(hdrs, key=lambda item: item.name.lower())
+    return sorted(measurement_headers(folder), key=lambda item: (item.name.lower(), str(item)))
 
 
 def _normalize_to_uint8(image: np.ndarray) -> np.ndarray:
@@ -957,6 +974,129 @@ def _scale_rgb_with_roi(cube: np.ndarray, idxs: List[int], roi_mask: Optional[np
     return scaled
 
 
+def _clamp_float(value, default: float, lower: float, upper: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = default
+    if not np.isfinite(numeric):
+        numeric = default
+    return float(np.clip(numeric, lower, upper))
+
+
+def _rgb_histogram_payload(
+    rgb: np.ndarray,
+    roi_mask: Optional[np.ndarray] = None,
+    bins: int = 64,
+    marker_percentiles: Tuple[float, float] = (1.0, 99.0),
+) -> dict:
+    channel_names = ["red", "green", "blue"]
+    finite_base = np.ones(rgb.shape[:2], dtype=bool)
+    if roi_mask is not None:
+        finite_base &= roi_mask.astype(bool)
+
+    finite_values = rgb[finite_base & np.all(np.isfinite(rgb), axis=-1)]
+    histogram_range = (
+        [min(0.0, float(finite_values.min())), max(1.0, float(finite_values.max()))]
+        if finite_values.size else [0.0, 1.0]
+    )
+
+    channels = []
+    for channel_idx, name in enumerate(channel_names):
+        channel = rgb[..., channel_idx].astype(np.float32)
+        finite_mask = np.isfinite(channel) & finite_base
+        values = channel[finite_mask]
+        if values.size == 0:
+            channels.append({
+                "id": name,
+                "counts": [0] * bins,
+                "min": 0.0,
+                "max": 1.0,
+                "p1": 0.0,
+                "p99": 1.0,
+            })
+            continue
+
+        counts, _ = np.histogram(values, bins=bins, range=histogram_range)
+        p1, p99 = np.percentile(values, [1, 99])
+        black_point, white_point = np.percentile(values, marker_percentiles)
+        channels.append({
+            "id": name,
+            "counts": counts.astype(int).tolist(),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "p1": float(p1),
+            "p99": float(p99),
+            "blackPoint": float(black_point),
+            "whitePoint": float(white_point),
+        })
+
+    return {"bins": bins, "range": histogram_range, "channels": channels}
+
+
+def _scale_rgb_for_display(
+    cube: np.ndarray,
+    idxs: List[int],
+    roi_mask: Optional[np.ndarray],
+    display: Optional[dict],
+) -> Tuple[np.ndarray, dict]:
+    rgb = np.stack([cube[:, :, i] for i in idxs], axis=-1).astype(np.float32)
+    if roi_mask is not None:
+        rgb = np.where(roi_mask[..., None].astype(bool), rgb, np.nan)
+
+    display = display if isinstance(display, dict) else {}
+    mode = str(display.get("mode") or "clip").lower()
+    low = _clamp_float(display.get("lowPercentile"), 1.0, 0.0, 50.0)
+    high = _clamp_float(display.get("highPercentile"), 99.0, 50.0, 100.0)
+    gamma = _clamp_float(display.get("gamma"), 1.0, 0.2, 3.0)
+    if high - low < 0.5:
+        high = min(100.0, low + 0.5)
+
+    histogram = _rgb_histogram_payload(rgb, roi_mask=roi_mask, marker_percentiles=(low, high))
+
+    finite_mask = np.all(np.isfinite(rgb), axis=-1)
+    if roi_mask is not None:
+        finite_mask &= roi_mask.astype(bool)
+
+    if mode == "clip" or not np.any(finite_mask):
+        scaled = np.clip(rgb, 0.0, 1.0)
+    elif mode == "luminance":
+        luminance = (
+            0.2126 * rgb[..., 0]
+            + 0.7152 * rgb[..., 1]
+            + 0.0722 * rgb[..., 2]
+        )
+        values = luminance[np.isfinite(luminance) & finite_mask]
+        lo, hi = np.percentile(values, [low, high])
+        stretched_luminance = np.clip((luminance - lo) / (hi - lo + 1e-8), 0.0, 1.0)
+        factor = stretched_luminance / (np.clip(luminance, 1e-8, None))
+        scaled = rgb * factor[..., None]
+        scaled = np.clip(scaled, 0.0, 1.0)
+    else:
+        scaled = np.zeros_like(rgb, dtype=np.float32)
+        for channel_idx in range(3):
+            channel = rgb[..., channel_idx]
+            values = channel[np.isfinite(channel) & finite_mask]
+            if values.size == 0:
+                continue
+            lo, hi = np.percentile(values, [low, high])
+            scaled[..., channel_idx] = np.clip((channel - lo) / (hi - lo + 1e-8), 0.0, 1.0)
+
+    scaled = np.clip(scaled, 0.0, 1.0) ** (1.0 / gamma)
+    scaled[~np.isfinite(scaled)] = 0.0
+    if roi_mask is not None:
+        scaled[~roi_mask.astype(bool)] = 0.0
+
+    metadata = {
+        "mode": mode,
+        "lowPercentile": low,
+        "highPercentile": high,
+        "gamma": gamma,
+        "histogram": histogram,
+    }
+    return (scaled * 255.0).astype(np.uint8), metadata
+
+
 def _extract_region_pixels(
     cube: np.ndarray, region: dict
 ) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
@@ -1059,7 +1199,8 @@ def _classify_with_sam(cube: np.ndarray, annotations: List[dict]):
 
     with np.errstate(divide="ignore", invalid="ignore"):
         denom = pixel_norm * class_norm.T
-        cos_theta = np.divide(pixel_matrix @ class_matrix.T, denom, where=denom > 0)
+        cos_theta = np.divide(pixel_matrix @ class_matrix.T, denom,
+                              out=np.zeros_like(denom), where=denom > 0)
     cos_theta = np.clip(cos_theta, -1.0, 1.0, out=np.zeros_like(cos_theta))
     angles = np.arccos(cos_theta)
     labels = np.argmin(angles, axis=1)
@@ -1147,6 +1288,7 @@ async def load_dataset(
                 await upload.close()
             load_target = temp_dir
         elif folder_path:
+            folder_path = _normalize_folder_path(folder_path)
             if not os.path.exists(folder_path):
                 return JSONResponse(
                     {"error": f"Path not found: {folder_path}"}, status_code=400
@@ -1158,7 +1300,7 @@ async def load_dataset(
                 status_code=400,
             )
 
-        CUBE, BANDS, warning_text, data_file = load_hsi(
+        cube, bands, warning_text, data_file, info = load_hsi(
             load_target,
             ignore_dark_ref=bool(ignore_dark_ref),
             ignore_white_ref=bool(ignore_white_ref),
@@ -1168,8 +1310,10 @@ async def load_dataset(
             crop_right=crop_right,
             max_bands=max_bands,
             data_hdr_name=data_hdr_name,
+            return_metadata=True,
         )
-    except FileNotFoundError as exc:
+        CUBE, BANDS = cube, bands
+    except (FileNotFoundError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
         return JSONResponse({"error": f"Failed to load dataset: {exc}"}, status_code=500)
@@ -1177,12 +1321,16 @@ async def load_dataset(
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    response = {"bands": BANDS, "shape": CUBE.shape, "data_file": data_file}
-    if folder_path:
-        roi_shape = _load_saved_roi(folder_path, data_hdr_name or f"{data_file}.hdr")
+    response = {
+        "bands": BANDS, "shape": CUBE.shape, "data_file": data_file,
+        "default_display_mode": _default_display_mode(CUBE),
+        **info,
+    }
+    if folder_path and not files:
+        roi_shape = _load_saved_roi(info["folder_path"], info["data_hdr_name"])
         if roi_shape is not None:
             response["roi_shape"] = roi_shape
-        annotations = _load_saved_annotations(folder_path, data_hdr_name or f"{data_file}.hdr", CUBE)
+        annotations = _load_saved_annotations(info["folder_path"], info["data_hdr_name"], CUBE)
         if annotations:
             response["annotations"] = annotations
     if warning_text:
@@ -1262,26 +1410,67 @@ async def save_annotations(req: Request):
     return {"saved": True, "path": str(annotations_path), "count": len(annotations)}
 
 
+@app.post("/registration")
+async def save_registration(req: Request):
+    try:
+        payload = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload"}, status_code=400)
+
+    moving_image = payload.get("movingImage")
+    if not isinstance(moving_image, dict):
+        return JSONResponse({"error": "Moving image metadata is required."}, status_code=400)
+
+    folder_path = moving_image.get("folderPath")
+    data_hdr_name = moving_image.get("dataHdrName")
+    method = payload.get("method")
+    registration_parameters = payload.get("registrationParameters")
+    point_pairs = payload.get("pointPairs")
+
+    if not folder_path or not data_hdr_name:
+        return JSONResponse(
+            {"error": "Registration saving is only available for measurements loaded from a folder path."},
+            status_code=400,
+        )
+    if not isinstance(method, str) or not method.strip():
+        return JSONResponse({"error": "Registration method is required."}, status_code=400)
+    if not isinstance(registration_parameters, dict):
+        return JSONResponse({"error": "Registration parameters are required."}, status_code=400)
+    if not isinstance(point_pairs, list):
+        return JSONResponse({"error": "Point pairs must be a list."}, status_code=400)
+
+    try:
+        registration_path = _registration_file_path(folder_path, data_hdr_name)
+        with open(registration_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to save registration: {exc}"}, status_code=500)
+
+    return {"saved": True, "path": str(registration_path), "count": len(point_pairs)}
+
+
 @app.get("/measurements")
 def list_measurements(folder_path: str = Query(...)):
     try:
-        folder = Path(folder_path)
+        folder_path = _normalize_folder_path(folder_path)
+        if not folder_path:
+            raise FileNotFoundError("Provide a dataset folder path first.")
+        folder = Path(folder_path).resolve()
         hdrs = _iter_measurement_hdrs(folder)
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
         return JSONResponse({"error": f"Failed to scan folder: {exc}"}, status_code=500)
 
-    return {
-        "measurements": [
-            {
-                "name": hdr.stem,
-                "data_hdr_name": hdr.name,
-                "folder_path": str(hdr.parent),
-            }
-            for hdr in hdrs
-        ]
-    }
+    measurements = []
+    for hdr in hdrs:
+        try:
+            info = measurement_info(hdr)
+        except Exception:
+            # Keep a malformed header visible so loading it reports its own error.
+            info = {"sensor": "ENVI", "folder_path": str(hdr.parent), "data_hdr_name": hdr.name}
+        measurements.append({"name": hdr.stem, **info})
+    return {"measurements": measurements}
 
 @app.post("/rgb")
 async def get_rgb(req: Request):
@@ -1311,13 +1500,26 @@ async def get_rgb(req: Request):
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    if roi_mask is None:
+    display = payload.get("display")
+    if not isinstance(display, dict) and _default_display_mode(CUBE) == "channel":
+        display = {"mode": "channel"}
+    if isinstance(display, dict):
+        rgb, display_metadata = _scale_rgb_for_display(CUBE, rgb_indices, roi_mask, display)
+    elif roi_mask is None:
+        raw_rgb = np.stack([CUBE[:, :, i] for i in rgb_indices], axis=-1).astype(np.float32)
         rgb = extract_rgb(CUBE, rgb_indices)
+        display_metadata = {
+            "mode": "clip",
+            "lowPercentile": 1.0,
+            "highPercentile": 99.0,
+            "gamma": 1.0,
+            "histogram": _rgb_histogram_payload(raw_rgb),
+        }
     else:
-        rgb = (_scale_rgb_with_roi(CUBE, rgb_indices, roi_mask) * 255.0).astype(np.uint8)
+        rgb, display_metadata = _scale_rgb_for_display(CUBE, rgb_indices, roi_mask, {"mode": "channel"})
 
     _, buf = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-    return {"image": buf.tobytes().hex()}
+    return {"image": buf.tobytes().hex(), "display": display_metadata}
 
 
 @app.post("/spectra")

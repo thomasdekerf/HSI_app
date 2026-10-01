@@ -1,6 +1,8 @@
 import numpy as np
 from pathlib import Path
 import warnings
+import re
+import xml.etree.ElementTree as ET
 from typing import Iterable, List, Optional
 
 import spectral.io.envi as envi
@@ -8,39 +10,214 @@ import spectral.io.envi as envi
 def _iter_hdr_files(folder: Path):
     """Yield header files in ``folder`` ignoring the case of the extension."""
 
-    for file_path in folder.rglob("*"):
-        if file_path.is_file() and file_path.suffix.lower() == ".hdr":
+    for file_path in sorted(folder.rglob("*")):
+        if (file_path.is_file() and file_path.suffix.lower() == ".hdr"
+                and not any(part.startswith(".") for part in file_path.relative_to(folder).parts)):
             yield file_path
 
 
+def _is_reference_hdr(file_path: Path) -> bool:
+    return _reference_kind(file_path) is not None
+
+
+def _reference_kind(file_path: Path):
+    name = file_path.stem.lower()
+    for kind, short in (("darkref", "dr"), ("whiteref", "wr")):
+        color = "dark" if kind == "darkref" else "white"
+        if re.search(rf"{color}[ _-]*ref(?:erence)?", name) or re.search(
+            rf"(^|[ _-]){short}($|[ _-])", name
+        ):
+            return kind
+    return None
+
+
+def _manifest_entries(folder: Path):
+    """Read the local Lumo manifest, restricting entries to this acquisition."""
+    manifest = folder / "manifest.xml"
+    if not manifest.is_file():
+        return []
+    try:
+        root = ET.parse(manifest).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    entries = []
+    for entry in root.findall("file"):
+        path = (folder / (entry.text or "").strip().replace("\\", "/")).resolve()
+        if path.is_relative_to(folder.resolve()) and path.suffix.lower() == ".hdr":
+            entries.append((str(entry.get("type", "")).lower(), path))
+    return entries
+
+
+def measurement_headers(folder: Path):
+    """Discover scans recursively, excluding reference and calibration headers."""
+    manifests = list(folder.rglob("manifest.xml"))
+    if folder.name.lower() == "capture":
+        manifests.append(folder.parent / "manifest.xml")
+    references = {
+        path for manifest in manifests
+        for kind, path in _manifest_entries(manifest.parent)
+        if kind in {"darkref", "whiteref"}
+    }
+    return [
+        hdr for hdr in _iter_hdr_files(folder)
+        if not _is_reference_hdr(hdr) and hdr.resolve() not in references
+        and not any(part.lower() in {"calibrations", "calibration"}
+                    for part in hdr.relative_to(folder).parts[:-1])
+    ]
+
+
+def detect_sensor(metadata: dict) -> str:
+    description = " ".join(str(metadata.get(key, "")) for key in
+                           ("sensor type", "data source", "camera", "description", "calibration pack")).lower()
+    if any(token in description for token in ("specim", "lumo", "fx10", "fx17", "fx50")):
+        return "Specim"
+    if any(token in description for token in ("imec", "snapscan")):
+        return "IMEC"
+    return "ENVI"
+
+
+def measurement_info(data_hdr: Path, metadata: Optional[dict] = None) -> dict:
+    if metadata is None:
+        metadata = envi.read_envi_header(str(data_hdr))
+    return {
+        "sensor": detect_sensor(metadata),
+        "sensor_type": str(metadata.get("sensor type", "")),
+        "folder_path": str(data_hdr.parent),
+        "data_hdr_name": data_hdr.name,
+    }
+
+
+def _reference_key(path: Path) -> str:
+    name = re.sub(r"(dark|white)[ _-]*ref(?:erence)?", "", path.stem.lower())
+    name = re.sub(r"(^|[ _-])(dr|wr)($|[ _-])", "", name)
+    name = re.sub(r"[ _-]object(?:[ _-](?:corrected|irradiance|reflectance))?$", "", name)
+    return re.sub(r"[^a-z0-9]", "", name)
+
+
+def calibration_references(data_hdr: Path, ignore_dark_ref=False, ignore_white_ref=False):
+    folder = data_hdr.parent
+    root = folder.parent if folder.name.lower() == "capture" else folder
+    entries = _manifest_entries(root)
+    ignored = {kind for kind, flag in (("darkref", ignore_dark_ref), ("whiteref", ignore_white_ref)) if flag}
+    if any(kind == "capture" and path == data_hdr.resolve() for kind, path in entries):
+        refs = {}
+        for kind in ("darkref", "whiteref"):
+            if kind in ignored:
+                refs[kind] = None
+                continue
+            matches = [path for role, path in entries if role == kind]
+            if len(matches) > 1:
+                raise ValueError(f"Multiple {kind.upper()} files in {root / 'manifest.xml'}")
+            refs[kind] = matches[0] if matches else None
+        return refs
+
+    # Never recurse into neighboring measurements looking for their references.
+    dirs = {folder, folder / "calibrations", folder / "calibration",
+            root, root / "calibrations", root / "calibration"}
+    candidates = sorted({p for directory in dirs if directory.is_dir()
+                         for p in directory.iterdir()
+                         if p.is_file() and p.suffix.lower() == ".hdr" and _is_reference_hdr(p)})
+    scans = {p for directory in {folder, root} for p in directory.iterdir()
+             if p.is_file() and p.suffix.lower() == ".hdr" and not _is_reference_hdr(p)
+             and not p.name.startswith(".")}
+    refs = {}
+    for kind in ("darkref", "whiteref"):
+        if kind in ignored:
+            refs[kind] = None
+            continue
+        choices = [p for p in candidates if _reference_kind(p) == kind]
+        matched = [p for p in choices if _reference_key(p) == _reference_key(data_hdr)]
+        generic = [p for p in choices if not _reference_key(p)]
+        # Preserve single-scan exports whose reference names use another prefix.
+        choices = matched or generic or (choices if len(scans) == 1 else [])
+        if len(choices) > 1:
+            raise ValueError(f"Ambiguous {kind.upper()} for {data_hdr.name}: "
+                             + ", ".join(str(p) for p in choices))
+        refs[kind] = choices[0] if choices else None
+    return refs
+
+
+def _open_envi(data_hdr: Path):
+    # Respect explicit filenames and ENVI extensions, including uppercase exports.
+    candidates = {p.name.lower(): p for p in data_hdr.parent.iterdir() if p.is_file()}
+    try:
+        metadata = envi.read_envi_header(str(data_hdr))
+    except (OSError, envi.EnviException):
+        metadata = {}
+    declared = metadata.get("data file")
+    if declared:
+        name = str(declared).strip().strip("{}\"'").replace("\\", "/").split("/")[-1]
+        binary = candidates.get(name.lower(), data_hdr.parent / name)
+    else:
+        names = [data_hdr.stem, *(data_hdr.stem + ext for ext in (".raw", ".img", ".dat", ".bil", ".bip", ".bsq"))]
+        binary = next((candidates[name.lower()] for name in names if name.lower() in candidates),
+                      data_hdr.with_suffix(".raw"))
+    return envi.open(str(data_hdr), str(binary))
+
+
+def _image_array(image):
+    return image.open_memmap() if hasattr(image, "open_memmap") else image.load()
+
+
 def find_file(folder: Path, keyword: str):
-    """Return the first file that contains keyword and ends with .hdr"""
+    """Return the first calibration file that matches a keyword and ends with .hdr."""
 
     keyword_lower = keyword.lower()
+    aliases = {
+        "darkref": ("darkref", "dark reference", "dark_reference"),
+        "whiteref": ("whiteref", "white reference", "white_reference"),
+    }.get(keyword_lower, (keyword_lower,))
     for file_path in _iter_hdr_files(folder):
-        if keyword_lower in file_path.name.lower():
+        lower_name = file_path.name.lower()
+        if any(alias in lower_name for alias in aliases):
             return file_path
     return None
 
 
 def _select_data_hdr(root: Path, data_hdr_name: Optional[str] = None) -> Path:
-    hdrs = list(_iter_hdr_files(root))
+    root = root.expanduser()
+    if root.is_file():
+        target = root.name if root.suffix.lower() == ".hdr" else root.stem + ".hdr"
+        return _select_data_hdr(root.parent, data_hdr_name or target)
+    hdrs = measurement_headers(root)
     normalized_target = None
     if data_hdr_name:
         normalized_target = data_hdr_name.lower()
         if not normalized_target.endswith(".hdr"):
             normalized_target = f"{normalized_target}.hdr"
 
-    for file_path in hdrs:
-        lower_name = file_path.name.lower()
-        if "darkref" in lower_name or "whiteref" in lower_name:
-            continue
-        if normalized_target is None or file_path.name.lower() == normalized_target:
-            return file_path
+    matches = [p for p in hdrs if normalized_target is None or p.name.lower() == normalized_target
+               or p.relative_to(root).as_posix().lower() == normalized_target]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError("Multiple measurements found. Select a measurement from the queue "
+                         "or provide its relative header path.")
 
     if data_hdr_name:
         raise FileNotFoundError(f'Missing data .hdr file "{data_hdr_name}"')
     raise FileNotFoundError("Missing data .hdr file")
+
+
+def _sensor_dark_references(folder: Path) -> List[str]:
+    """Identify sensor-frame references without pretending they are ENVI cubes."""
+    found = []
+    for sidecar in sorted(folder.glob("*.raw.xml")):
+        if not any(token in sidecar.name.lower() for token in ("darkref", "dark reference", "dark_reference")):
+            continue
+        if not sidecar.with_suffix("").is_file():
+            continue
+        try:
+            root = ET.parse(sidecar).getroot()
+            data_format = root.find("data_format")
+            if root.get("kind") == "ROI_FRAME" and data_format is not None:
+                found.append(
+                    f"{sidecar.with_suffix('').name} "
+                    f"({data_format.get('nr_rows')}x{data_format.get('nr_cols')} sensor frame)"
+                )
+        except (ET.ParseError, OSError):
+            continue
+    return found
 
 def _parse_wavelengths(values: Optional[Iterable]) -> Optional[List[float]]:
     """Normalize wavelength entries from ENVI metadata to a float list."""
@@ -83,33 +260,16 @@ def _extract_wavelengths(metadata: Optional[dict]) -> Optional[List[float]]:
     return None
 
 
-def _normalize_uncalibrated_data(data: np.ndarray) -> np.ndarray:
-    """Scale raw data to ``[0, 1]`` when calibration references are missing.
-
-    Without calibration the raw values can be arbitrarily large, which would be
-    clipped to white by downstream RGB extraction.  This function rescales the
-    cube using the finite global min/max to preserve contrast while keeping the
-    output compatible with the rest of the pipeline.
-    """
-
-    array = np.asarray(data, dtype=np.float32)
-
-    if array.size == 0:
-        return np.zeros_like(array, dtype=np.float32)
-
-    finite_mask = np.isfinite(array)
-    if not np.any(finite_mask):
-        return np.zeros_like(array, dtype=np.float32)
-
-    finite_values = array[finite_mask]
-    min_val = float(np.min(finite_values))
-    max_val = float(np.max(finite_values))
-
-    if max_val - min_val < 1e-9:
-        return np.zeros_like(array, dtype=np.float32)
-
-    scaled = (array - min_val) / (max_val - min_val)
-    return np.clip(scaled, 0.0, 1.0, out=np.empty_like(array))
+def _metadata_truthy(metadata: Optional[dict], key: str) -> bool:
+    if not metadata or key not in metadata:
+        return False
+    value = metadata[key]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    return normalized in {"1", "true", "yes", "y"}
 
 
 def _crop_axis_by_edges(
@@ -164,6 +324,35 @@ def _apply_crop_limits(
     return cropped_cube, cropped_wavelengths, crop_applied
 
 
+def _wavelength_axis(metadata: dict, bands: int):
+    wavelengths = _extract_wavelengths(metadata)
+    valid = (wavelengths is not None and len(wavelengths) == bands
+             and any(key in metadata for key in ("wavelength", "wavelengths")))
+    if wavelengths is not None and str(metadata.get("wavelength units", "")).lower() in {
+        "micrometers", "micrometer", "microns", "um", "µm",
+    }:
+        wavelengths = [value * 1000 for value in wavelengths]
+    return wavelengths, valid
+
+
+def _reference_mean(hdr: Path, data_shape, data_metadata: dict, sensor: str):
+    image = _open_envi(hdr)
+    reference = _image_array(image)
+    if reference.ndim != 3 or reference.shape[1:] != data_shape[1:]:
+        raise ValueError(f"Calibration {hdr.name} has shape {reference.shape}; samples and bands "
+                         f"must match the measurement {data_shape}.")
+    metadata = getattr(image, "metadata", {}) or {}
+    axis, valid = _wavelength_axis(data_metadata, data_shape[2])
+    ref_axis, ref_valid = _wavelength_axis(metadata, reference.shape[2])
+    if valid and ref_valid and not np.allclose(axis, ref_axis, atol=0.05, rtol=0, equal_nan=True):
+        raise ValueError(f"Calibration {hdr.name} wavelengths do not match the measurement.")
+    if sensor == "Specim" and "tint" in metadata and "tint" in data_metadata:
+        if not np.isclose(float(metadata["tint"]), float(data_metadata["tint"])):
+            raise ValueError(f"Calibration {hdr.name} integration time does not match the measurement.")
+    # Keep the scan's per-column/per-band response; only average scan lines.
+    return np.mean(reference, axis=0, dtype=np.float32)
+
+
 def load_hsi(
     input_path: str,
     ignore_dark_ref: bool = False,
@@ -174,97 +363,122 @@ def load_hsi(
     crop_right: Optional[int] = None,
     max_bands: Optional[int] = None,
     data_hdr_name: Optional[str] = None,
+    return_metadata: bool = False,
 ):
-    """
-    Auto-load HSI dataset (data + dark + white refs).
-    input_path can be:
-      - folder containing .hdr/.raw pairs
-      - single .hdr or .raw file
-    Returns: tuple of (corrected hyperspectral cube (H, W, Bands), wavelengths list, warning)
+    """Load an IMEC, Specim or generic ENVI scan into a shared (H, W, bands) cube.
 
-    ``ignore_dark_ref`` / ``ignore_white_ref`` allow skipping calibration files even if
-    they are present on disk, falling back to normalized uncorrected data.
+    Returns cube, wavelengths, warning, name; optionally appends measurement metadata.
+    Both references are required for (signal - dark) / (white - dark) calibration.
+    Already exported reflectance is not calibrated a second time.
     """
-    path = Path(input_path)
-    folder = path.parent if path.is_file() else path
-
+    data_hdr = _select_data_hdr(Path(input_path), data_hdr_name=data_hdr_name)
+    image = _open_envi(data_hdr)
+    source = _image_array(image)
+    metadata = getattr(image, "metadata", {}) or {}
+    info = measurement_info(data_hdr, metadata)
     warnings_list = []
-    data_hdr = _select_data_hdr(folder, data_hdr_name=data_hdr_name)
-    measurement_folder = data_hdr.parent
+    already_reflectance = _metadata_truthy(metadata, "reflectance data")
+    scale = float(metadata.get("reflectance scale factor", 1))
+    if "reflectance scale factor" in metadata:
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError("Reflectance scale factor must be a positive finite number.")
+        already_reflectance = True
 
-    dark_hdr_original = find_file(measurement_folder, "darkref")
-    white_hdr_original = find_file(measurement_folder, "whiteref")
-    dark_hdr = None if ignore_dark_ref else dark_hdr_original
-    white_hdr = None if ignore_white_ref else white_hdr_original
+    refs = ({"darkref": None, "whiteref": None} if already_reflectance
+            else calibration_references(data_hdr, ignore_dark_ref, ignore_white_ref))
+    dark_hdr = None if ignore_dark_ref else refs["darkref"]
+    white_hdr = None if ignore_white_ref else refs["whiteref"]
+    info["calibration"] = {
+        "status": "reflectance" if already_reflectance else "raw",
+        "dark_reference": str(dark_hdr) if dark_hdr else None,
+        "white_reference": str(white_hdr) if white_hdr else None,
+    }
 
-    # corresponding raw file paths
-    def raw_from_hdr(h): return h.with_suffix(".raw")
+    wavelengths, has_wavelength_axis = _wavelength_axis(metadata, source.shape[2])
+    if wavelengths is None or len(wavelengths) != source.shape[2]:
+        message = "Wavelength metadata missing or invalid; falling back to band indices."
+        warnings_list.append(message)
+        warnings.warn(message)
+        wavelengths = list(range(source.shape[2]))
+    order = np.arange(source.shape[2])
+    if has_wavelength_axis:
+        values = np.asarray(wavelengths, dtype=float)
+        valid = np.flatnonzero(np.isfinite(values) & (values > 0))
+        if not valid.size:
+            raise ValueError("No valid positive wavelengths in the measurement header.")
+        order = valid[np.argsort(values[valid], kind="stable")]
+        removed = len(values) - len(valid)
+        if removed:
+            warnings_list.append(f"Excluded {removed} bands with invalid or zero wavelengths.")
 
-    data_img = envi.open(str(data_hdr),  str(raw_from_hdr(data_hdr)))
-    data_ref = np.array(data_img.load(), dtype=np.float32)
-    wavelengths = _extract_wavelengths(getattr(data_img, "metadata", None))
+    band_slice = _crop_axis_to_size(len(order), max_bands)
+    band_crop_applied = len(order[band_slice]) != len(order)
+    order = order[band_slice]
+    wavelengths = [wavelengths[index] for index in order]
+    height_slice = _crop_axis_by_edges(source.shape[0], crop_top, crop_bottom)
+    width_slice = _crop_axis_by_edges(source.shape[1], crop_left, crop_right)
+    view = source[height_slice, width_slice, :]
+    # Allocate just the final cube. Chunked copying bounds temporary memory for BIL scans.
+    corrected = np.empty((*view.shape[:2], len(order)), dtype=np.float32)
+    for start in range(0, view.shape[0], 64):
+        corrected[start:start + 64] = np.take(view[start:start + 64], order, axis=2)
 
-    ignored_parts = []
-    if ignore_dark_ref:
-        ignored_parts.append("DARKREF")
-    if ignore_white_ref:
-        ignored_parts.append("WHITEREF")
-
-    if dark_hdr and white_hdr:
-        dark_ref = np.array(envi.open(str(dark_hdr), str(raw_from_hdr(dark_hdr))).load(), dtype=np.float32)
-        white_ref = np.array(envi.open(str(white_hdr), str(raw_from_hdr(white_hdr))).load(), dtype=np.float32)
-
-        dark_mean  = np.mean(dark_ref, axis=0)
-        white_mean = np.mean(white_ref, axis=0)
-
-        corrected = (data_ref - dark_mean) / (white_mean - dark_mean + 1e-8)
-        corrected = np.clip(corrected, 0, 1)
+    if already_reflectance:
+        corrected /= scale
+    elif dark_hdr and white_hdr:
+        dark = _reference_mean(dark_hdr, source.shape, metadata, info["sensor"])[width_slice][:, order]
+        white = _reference_mean(white_hdr, source.shape, metadata, info["sensor"])[width_slice][:, order]
+        denominator = white - dark
+        valid = np.isfinite(denominator) & np.isfinite(dark) & (denominator > 1e-8)
+        corrected -= dark
+        np.divide(corrected, denominator, out=corrected, where=valid)
+        corrected[:, ~valid] = 0
+        np.nan_to_num(corrected, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        np.clip(corrected, 0, 1, out=corrected)
+        info["calibration"]["status"] = "white-dark"
+        if not np.all(valid):
+            warnings_list.append(f"Set {np.count_nonzero(~valid)} invalid white/dark reference "
+                                 "sample-band positions to zero (white must exceed dark).")
     else:
-        missing_parts = []
-        if not dark_hdr and not ignore_dark_ref and dark_hdr_original is None:
-            missing_parts.append("DARKREF")
-        if not white_hdr and not ignore_white_ref and white_hdr_original is None:
-            missing_parts.append("WHITEREF")
+        ignored = [name for flag, name in ((ignore_dark_ref, "DARKREF"),
+                                          (ignore_white_ref, "WHITEREF")) if flag]
+        missing = []
+        sensor_dark = (_sensor_dark_references(data_hdr.parent)
+                       if not dark_hdr and not ignore_dark_ref else [])
+        if not dark_hdr and not ignore_dark_ref:
+            if sensor_dark:
+                warnings_list.append(
+                    "Dark reference present in sensor-frame format: " + ", ".join(sensor_dark) + ". "
+                    "This loader requires an ENVI dark-reference cube aligned with the measurement; "
+                    "the sensor-frame-to-cube mapping is unavailable. Export calibrated reflectance "
+                    "from imec Snapscan, or provide compatible ENVI calibration cubes. "
+                    "Returning uncalibrated data, not reflectance."
+                )
+            else:
+                missing.append("DARKREF")
+        if not white_hdr and not ignore_white_ref:
+            missing.append("WHITEREF")
+        details = []
+        if missing:
+            details.append(f"missing ({', '.join(missing)})")
+        if ignored:
+            details.append(f"ignored by request ({', '.join(ignored)})")
+        if details:
+            message = f"Calibration reference files {'; '.join(details)}; returning raw uncorrected data."
+            warnings_list.append(message)
+            warnings.warn(message)
 
-        if missing_parts or ignored_parts:
-            details = []
-            if missing_parts:
-                details.append(f"missing ({', '.join(missing_parts)})")
-            if ignored_parts:
-                details.append(f"ignored by request ({', '.join(ignored_parts)})")
-            calibration_warning = (
-                f"Calibration reference files {'; '.join(details)}; returning normalized uncorrected data."
-            )
-            warnings_list.append(calibration_warning)
-            warnings.warn(calibration_warning)
+    if view.shape[:2] != source.shape[:2] or band_crop_applied:
+        warnings_list.append(f"Dataset cropped to {corrected.shape[0]}x{corrected.shape[1]}x{corrected.shape[2]}")
 
-        corrected = _normalize_uncalibrated_data(data_ref)
-
-    if wavelengths is None or len(wavelengths) != corrected.shape[2]:
-        metadata_warning = (
-            "Wavelength metadata missing or invalid; falling back to band indices."
-        )
-        warnings_list.append(metadata_warning)
-        wavelengths = list(range(corrected.shape[2]))
-        warnings.warn(metadata_warning)
-
-    corrected, wavelengths, crop_applied = _apply_crop_limits(
-        corrected,
-        wavelengths,
-        crop_top=crop_top,
-        crop_bottom=crop_bottom,
-        crop_left=crop_left,
-        crop_right=crop_right,
-        max_bands=max_bands,
-    )
-    if crop_applied:
-        crop_warning = (
-            f"Dataset cropped to {corrected.shape[0]}x{corrected.shape[1]}x{corrected.shape[2]}"
-        )
-        warnings_list.append(crop_warning)
-
+    # ENVI default bands are one-based; map through filtering, sorting and cropping.
+    defaults = _parse_wavelengths(metadata.get("default bands"))
+    if info["sensor"] == "Specim" and defaults and len(defaults) == 3:
+        if all(np.isfinite(value) and value.is_integer() and 1 <= value <= source.shape[2] for value in defaults):
+            info["default_rgb_indices"] = [int(np.argmin(np.abs(order - (int(value) - 1)))) for value in defaults]
     warning_text = "; ".join(warnings_list) if warnings_list else None
-    return corrected, wavelengths, warning_text, data_hdr.stem
+    result = (corrected, wavelengths, warning_text, data_hdr.stem)
+    return (*result, info) if return_metadata else result
 
 def extract_rgb(cube: np.ndarray, idxs):
     """Extract pseudo-RGB image from cube given band indices."""

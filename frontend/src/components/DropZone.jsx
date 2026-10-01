@@ -22,6 +22,7 @@ export default function DropZone({
   onSelectMeasurement,
   onActivateMeasurement,
   onQueueMeasurements,
+  onClearMeasurements,
   onRemoveMeasurement,
 }) {
   const [path, setPath] = useState("");
@@ -60,7 +61,9 @@ export default function DropZone({
       const queuedMeasurements = discovered
         .map((measurement) => ({
           id: createMeasurementId(),
-          name: getStem(measurement.name),
+          name: measurement.name,
+          sensor: measurement.sensor,
+          sensorType: measurement.sensor_type,
           source: {
             type: "path",
             path: measurement.folder_path,
@@ -90,7 +93,7 @@ export default function DropZone({
         <div>
           <h2 className="card__title">Measurement Explorer</h2>
           <p className="card__subtitle">
-            Queue a dataset folder path, then double-click a measurement to load it.
+            Queue a main folder of IMEC or Specim measurements, then double-click a scan to load it.
           </p>
         </div>
         <div className="measurement-sidebar__count">{measurementCountLabel}</div>
@@ -105,7 +108,7 @@ export default function DropZone({
             id="dataset-path"
             type="text"
             className="field-input"
-            placeholder="/path/to/measurement"
+            placeholder="/path/to/measurements"
             value={path}
             onChange={(event) => setPath(event.target.value)}
           />
@@ -134,8 +137,16 @@ export default function DropZone({
         </div>
 
         <div className="measurement-sidebar__actions">
-          <button type="button" className="btn btn-ghost" onClick={queuePathMeasurement}>
+          <button type="button" className="btn btn-ghost" onClick={queuePathMeasurement} disabled={pathLoading}>
             {pathLoading ? "Scanning..." : "Queue path"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onClearMeasurements}
+            disabled={measurements.length === 0}
+          >
+            Clear box
           </button>
         </div>
 
@@ -174,14 +185,25 @@ export default function DropZone({
                   key={measurement.id}
                   type="button"
                   className={`measurement-listbox__item${isActive ? " is-active" : ""}`}
+                  title={[measurement.source?.path, measurement.sensorType, measurement.warning].filter(Boolean).join("\n")}
                   onClick={() => onSelectMeasurement(measurement.id)}
                   onDoubleClick={() => onActivateMeasurement(measurement.id)}
+                  draggable={Boolean(measurement.isLoaded && measurement.rgb)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("application/x-hsi-measurement-id", measurement.id);
+                    event.dataTransfer.setData("text/plain", measurement.id);
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
                 >
                   <span className="measurement-listbox__name">{measurement.name}</span>
                   <span className="measurement-listbox__meta">
+                    {measurement.sensor ? `${measurement.sensor} · ` : ""}
                     {measurement.shape
                       ? `${measurement.shape[0]}x${measurement.shape[1]}x${measurement.shape[2]}`
                       : status}
+                    {measurement.calibration?.status === "white-dark" && " · WR/DR calibrated"}
+                    {measurement.calibration?.status === "reflectance" && " · Reflectance"}
+                    {measurement.calibration?.status === "raw" && " · Raw"}
                   </span>
                 </button>
               );

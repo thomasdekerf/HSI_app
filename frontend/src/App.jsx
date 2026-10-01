@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DropZone from "./components/DropZone";
 import HSIViewer from "./components/HSIViewer";
+import ImageRegistrationPanel from "./components/ImageRegistrationPanel";
 import SupervisedPanel from "./components/SupervisedPanel";
 import { getRGB, getSpectra, loadDataset, runAnalysis, saveAnnotations, saveRoi } from "./api";
 import { getSeriesStyleByIndex, normalizeLineStyleId, normalizeSeriesColor } from "./utils/seriesStyles";
 import "./App.css";
 
 const EMPTY_LIST = [];
+const DEFAULT_DISPLAY_SETTINGS = {
+  mode: "clip",
+  lowPercentile: 1,
+  highPercentile: 99,
+  gamma: 1,
+};
 
 function normalizeBands(bands) {
   if (!Array.isArray(bands)) return [];
@@ -39,6 +46,8 @@ function updateMeasurementById(measurements, measurementId, updater) {
 
 function measurementOptionSignature(options) {
   return JSON.stringify({
+    ignoreDarkRef: Boolean(options?.ignoreDarkRef),
+    ignoreWhiteRef: Boolean(options?.ignoreWhiteRef),
     cropTop: options?.cropTop ?? null,
     cropBottom: options?.cropBottom ?? null,
     cropLeft: options?.cropLeft ?? null,
@@ -55,6 +64,7 @@ function isQueueableMeasurement(entry) {
 
 export default function App() {
   const [measurements, setMeasurements] = useState([]);
+  const [hiddenMeasurementIds, setHiddenMeasurementIds] = useState([]);
   const [importedSelections, setImportedSelections] = useState([]);
   const [activeMeasurementId, setActiveMeasurementId] = useState(null);
   const [backendMeasurementId, setBackendMeasurementId] = useState(null);
@@ -74,6 +84,11 @@ export default function App() {
   const activeMeasurement = useMemo(
     () => measurements.find((measurement) => measurement.id === activeMeasurementId) || null,
     [measurements, activeMeasurementId],
+  );
+
+  const visibleMeasurements = useMemo(
+    () => measurements.filter((measurement) => !hiddenMeasurementIds.includes(measurement.id)),
+    [hiddenMeasurementIds, measurements],
   );
 
   const allSelections = useMemo(
@@ -122,6 +137,8 @@ export default function App() {
       bands: [],
       idxs: [0, 0, 0],
       rgb: null,
+      rgbDisplay: { ...DEFAULT_DISPLAY_SETTINGS },
+      rgbDisplayStats: null,
       shape: null,
       selections: [],
       loadedOptionSignature: "",
@@ -131,6 +148,7 @@ export default function App() {
     }));
 
     setMeasurements((prev) => [...prev, ...prepared]);
+    setHiddenMeasurementIds((prev) => prev.filter((id) => !prepared.some((entry) => entry.id === id)));
     if (!activeMeasurementId && prepared[0]) {
       setActiveMeasurementId(prepared[0].id);
     }
@@ -155,7 +173,17 @@ export default function App() {
     try {
       const data = await loadDataset(measurement.source, measurement.options);
       const parsedBands = normalizeBands(data.bands || []);
-      const nextIndices = chooseInitialIndices(parsedBands);
+      const suggestedIndices = data.default_rgb_indices;
+      const nextIndices = Array.isArray(suggestedIndices) && suggestedIndices.length === 3 &&
+        suggestedIndices.every((index) => Number.isInteger(index) && index >= 0 && index < parsedBands.length)
+        ? suggestedIndices : chooseInitialIndices(parsedBands);
+      const loadedSelections = Array.isArray(data.annotations) && data.annotations.length > 0
+        ? data.annotations
+        : await Promise.all((measurement.selections || []).map(async (selection) => {
+            if (!selection.shape && !selection.bounds) return selection;
+            const refreshed = await getSpectra({ shape: selection.shape, bounds: selection.bounds });
+            return { ...selection, spectra: refreshed.spectra, stddev: refreshed.stddev, bands: parsedBands };
+          }));
 
       setMeasurements((prev) =>
         updateMeasurementById(prev, measurementId, (entry) => ({
@@ -163,8 +191,21 @@ export default function App() {
           bands: parsedBands,
           idxs: nextIndices,
           shape: Array.isArray(data.shape) ? data.shape : null,
+          sensor: data.sensor || entry.sensor,
+          sensorType: data.sensor_type || entry.sensorType,
+          calibration: data.calibration,
+          source: entry.source.type === "path" ? {
+            ...entry.source,
+            path: data.folder_path || entry.source.path,
+            dataHdrName: data.data_hdr_name || entry.source.dataHdrName,
+          } : entry.source,
           warning: data.warning || "",
           rgb: null,
+          rgbDisplay: {
+            ...(entry.rgbDisplay || DEFAULT_DISPLAY_SETTINGS),
+            mode: data.default_display_mode || DEFAULT_DISPLAY_SETTINGS.mode,
+          },
+          rgbDisplayStats: null,
           isLoaded: true,
           isLoading: false,
           error: "",
@@ -173,12 +214,10 @@ export default function App() {
           analysisVisuals: [],
           roiShape: data.roi_shape || null,
           roiEnabled: Boolean(data.roi_shape),
-          selections: Array.isArray(data.annotations) && data.annotations.length > 0
-            ? data.annotations.map((selection) => ({
-                ...selection,
-                bands: parsedBands,
-              }))
-            : entry.selections,
+          selections: loadedSelections.map((selection) => ({
+            ...selection,
+            bands: selection.bands || parsedBands,
+          })),
         })),
       );
       setBackendMeasurementId(measurementId);
@@ -203,6 +242,19 @@ export default function App() {
       updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
         ...measurement,
         idxs: nextIdxs,
+      })),
+    );
+  };
+
+  const handleDisplaySettingsChange = (nextSettings) => {
+    if (!activeMeasurementId) return;
+    setMeasurements((prev) =>
+      updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
+        ...measurement,
+        rgbDisplay: {
+          ...(measurement.rgbDisplay || DEFAULT_DISPLAY_SETTINGS),
+          ...nextSettings,
+        },
       })),
     );
   };
@@ -351,6 +403,7 @@ export default function App() {
         analysisVisuals: [],
         roiShape: null,
         roiEnabled: false,
+        rgbDisplayStats: null,
       })),
     );
   };
@@ -363,6 +416,7 @@ export default function App() {
         roiShape: shape,
         roiEnabled: true,
         analysisVisuals: [],
+        rgbDisplayStats: null,
       })),
     );
     setSuiteError("");
@@ -376,6 +430,7 @@ export default function App() {
         roiShape: null,
         roiEnabled: false,
         analysisVisuals: [],
+        rgbDisplayStats: null,
       })),
     );
     setSuiteError("");
@@ -388,6 +443,7 @@ export default function App() {
         ...measurement,
         roiEnabled: measurement.roiShape ? !measurement.roiEnabled : false,
         analysisVisuals: [],
+        rgbDisplayStats: null,
       })),
     );
     setSuiteError("");
@@ -440,6 +496,7 @@ export default function App() {
   };
 
   const handleRemoveMeasurement = (measurementId) => {
+    setHiddenMeasurementIds((prev) => prev.filter((id) => id !== measurementId));
     setMeasurements((prev) => {
       const remaining = prev.filter((measurement) => measurement.id !== measurementId);
       if (activeMeasurementId === measurementId) {
@@ -451,6 +508,10 @@ export default function App() {
       }
       return remaining;
     });
+  };
+
+  const handleClearMeasurementBox = () => {
+    setHiddenMeasurementIds(measurements.map((measurement) => measurement.id));
   };
 
   const activeBands = activeMeasurement?.bands ?? EMPTY_LIST;
@@ -475,13 +536,15 @@ export default function App() {
     let cancelled = false;
     getRGB(idxs, {
       roiShape: activeMeasurement?.roiEnabled ? activeMeasurement?.roiShape || null : null,
+      display: activeMeasurement?.rgbDisplay || DEFAULT_DISPLAY_SETTINGS,
     })
-      .then((image) => {
+      .then((data) => {
         if (cancelled) return;
         setMeasurements((prev) =>
           updateMeasurementById(prev, activeMeasurementId, (measurement) => ({
             ...measurement,
-            rgb: image,
+            rgb: data.image,
+            rgbDisplayStats: data.display || null,
           })),
         );
       })
@@ -494,7 +557,15 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeBands, activeIdxs, activeMeasurement?.roiEnabled, activeMeasurement?.roiShape, activeMeasurementId, backendMeasurementId]);
+  }, [
+    activeBands,
+    activeIdxs,
+    activeMeasurement?.rgbDisplay,
+    activeMeasurement?.roiEnabled,
+    activeMeasurement?.roiShape,
+    activeMeasurementId,
+    backendMeasurementId,
+  ]);
 
   useEffect(() => {
     if (
@@ -516,6 +587,7 @@ export default function App() {
   const tabs = [
     { id: "viewer", label: "Visualization + Unsupervised" },
     { id: "supervised", label: "Supervised Classification" },
+    { id: "registration", label: "Image Registration" },
   ];
 
   const activeMeasurementReady =
@@ -548,11 +620,12 @@ export default function App() {
       <main className={`app-workspace${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
         {!sidebarCollapsed && (
           <DropZone
-            measurements={measurements}
+            measurements={visibleMeasurements}
             activeMeasurement={activeMeasurement}
             onSelectMeasurement={setActiveMeasurementId}
             onActivateMeasurement={handleActivateMeasurement}
             onQueueMeasurements={queueMeasurements}
+            onClearMeasurements={handleClearMeasurementBox}
             onUpdateMeasurementOptions={handleUpdateMeasurementOptions}
             onRemoveMeasurement={handleRemoveMeasurement}
           />
@@ -562,32 +635,32 @@ export default function App() {
           {warning && <div className="warning-banner">{warning}</div>}
           {activeMeasurement?.error && <div className="warning-banner warning-banner--error">{activeMeasurement.error}</div>}
 
-          {!activeMeasurementReady ? (
-            <section className="empty-state card">
-              <h2 className="card__title">Load a measurement from the explorer</h2>
-              <p className="card__subtitle">
-                Queue folders or dropped datasets on the left, then double-click a measurement to
-                make it active. The spectra window retains annotations from previously loaded
-                measurements.
-              </p>
-            </section>
-          ) : (
-            <section className="interactive-area">
-              <nav className="tab-bar" aria-label="Primary views">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`tab-button${activeTab === tab.id ? " is-active" : ""}`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </nav>
+          <section className="interactive-area">
+            <nav className="tab-bar" aria-label="Primary views">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`tab-button${activeTab === tab.id ? " is-active" : ""}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
 
-              <div className="panel-surface">
-                {activeTab === "supervised" ? (
+            <div className="panel-surface">
+              {activeTab === "registration" ? (
+                <ImageRegistrationPanel measurements={measurements} />
+              ) : !activeMeasurementReady ? (
+                <section className="empty-state card">
+                  <h2 className="card__title">Load a measurement from the explorer</h2>
+                  <p className="card__subtitle">
+                    Queue folders or dropped datasets on the left, then double-click a measurement to
+                    make it active. The image registration tab can also be used with ordinary image files.
+                  </p>
+                </section>
+              ) : activeTab === "supervised" ? (
                   <SupervisedPanel
                     bands={activeMeasurement.bands}
                     rgb={activeMeasurement.rgb}
@@ -600,13 +673,16 @@ export default function App() {
                     suiteLoading={suiteLoading}
                     suiteError={suiteError}
                   />
-                ) : (
+              ) : (
                   <HSIViewer
                     measurementName={activeMeasurement.name}
                     bands={activeMeasurement.bands}
                     rgb={activeMeasurement.rgb}
+                    displaySettings={activeMeasurement.rgbDisplay || DEFAULT_DISPLAY_SETTINGS}
+                    displayStats={activeMeasurement.rgbDisplayStats}
                     idxs={activeMeasurement.idxs}
                     onChange={handleIdxChange}
+                    onDisplaySettingsChange={handleDisplaySettingsChange}
                     selections={activeMeasurement.selections}
                     allSelections={allSelections}
                     currentSelections={currentMeasurementSelections}
@@ -630,10 +706,9 @@ export default function App() {
                     canSaveRoi={activeMeasurement.source?.type === "path"}
                     canSaveAnnotations={activeMeasurement.source?.type === "path"}
                   />
-                )}
-              </div>
-            </section>
-          )}
+              )}
+            </div>
+          </section>
         </section>
       </main>
     </div>

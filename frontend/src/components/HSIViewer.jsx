@@ -64,12 +64,211 @@ function clampZoomPercent(value) {
   return Math.min(400, Math.max(50, numeric));
 }
 
+function clampDisplayPercentile(value, min, max, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function HistogramChannel({ channel, range = [0, 1] }) {
+  const counts = Array.isArray(channel?.counts) ? channel.counts : [];
+  const maxCount = Math.max(1, ...counts);
+  const barWidth = counts.length > 0 ? 100 / counts.length : 100;
+  const channelClass = `histogram-channel histogram-channel--${channel?.id || "red"}`;
+  const p1 = Number(channel?.p1);
+  const p99 = Number(channel?.p99);
+  const markerPosition = (value) => Math.min(100, Math.max(0,
+    ((Number(value) - range[0]) / (range[1] - range[0] || 1)) * 100,
+  ));
+  const blackPoint = markerPosition(channel?.blackPoint ?? channel?.p1 ?? range[0]);
+  const whitePoint = markerPosition(channel?.whitePoint ?? channel?.p99 ?? range[1]);
+
+  return (
+    <div className={channelClass}>
+      <div className="histogram-channel__header">
+        <span>{channel?.id || "channel"}</span>
+        <span>
+          p1 {Number.isFinite(p1) ? p1.toFixed(3) : "-"} | p99 {Number.isFinite(p99) ? p99.toFixed(3) : "-"}
+        </span>
+      </div>
+      <svg className="histogram-channel__plot" viewBox="0 0 100 44" preserveAspectRatio="none" aria-hidden="true">
+        {counts.map((count, index) => {
+          const height = Math.max(1, (count / maxCount) * 40);
+          return (
+            <rect
+              key={`${channel?.id || "channel"}-${index}`}
+              x={index * barWidth}
+              y={42 - height}
+              width={Math.max(0.4, barWidth - 0.15)}
+              height={height}
+            />
+          );
+        })}
+        <line x1={blackPoint} x2={blackPoint} y1="2" y2="42" className="histogram-marker histogram-marker--low" />
+        <line x1={whitePoint} x2={whitePoint} y1="2" y2="42" className="histogram-marker histogram-marker--high" />
+      </svg>
+    </div>
+  );
+}
+
+function DisplayScalingWindow({ settings, stats, onChange, onClose }) {
+  const current = {
+    mode: settings?.mode || "clip",
+    lowPercentile: Number(settings?.lowPercentile ?? 1),
+    highPercentile: Number(settings?.highPercentile ?? 99),
+    gamma: Number(settings?.gamma ?? 1),
+  };
+  const lowPercentile = clampDisplayPercentile(current.lowPercentile, 0, 50, 1);
+  const highPercentile = clampDisplayPercentile(current.highPercentile, 50, 100, 99);
+  const gamma = Math.min(3, Math.max(0.2, current.gamma || 1));
+  const channels = Array.isArray(stats?.histogram?.channels) ? stats.histogram.channels : [];
+
+  const updateSetting = (patch) => {
+    const next = { ...current, ...patch };
+    if (next.highPercentile - next.lowPercentile < 0.5) {
+      if (Object.prototype.hasOwnProperty.call(patch, "lowPercentile")) {
+        next.highPercentile = Math.min(100, next.lowPercentile + 0.5);
+      } else {
+        next.lowPercentile = Math.max(0, next.highPercentile - 0.5);
+      }
+    }
+    onChange?.(next);
+  };
+
+  return (
+    <div className="display-window-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="display-window window-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Display scaling"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="window-panel__header">
+          <div>
+            <h3 className="window-panel__title">Display scaling</h3>
+            <div className="window-panel__meta">Histogram stretch for the current false-RGB bands</div>
+          </div>
+          <button type="button" className="btn btn-ghost btn--compact" onClick={onClose}>
+            Close
+          </button>
+        </header>
+
+        <div className="display-window__body">
+          <div className="display-mode-grid" role="group" aria-label="Scaling mode">
+            {[
+              { id: "clip", label: "Raw clip" },
+              { id: "channel", label: "Channel stretch" },
+              { id: "luminance", label: "Luminance stretch" },
+            ].map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                className={`display-mode-button${current.mode === mode.id ? " is-active" : ""}`}
+                onClick={() => updateSetting({ mode: mode.id })}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="histogram-stack">
+            {channels.length > 0 ? (
+              channels.map((channel) => (
+                <HistogramChannel key={channel.id} channel={channel} range={stats.histogram.range} />
+              ))
+            ) : (
+              <div className="notice">Load a false-RGB image to show histogram data.</div>
+            )}
+          </div>
+
+          <div className="display-scaling-controls">
+            <label className="band-sliders__item">
+              <span className="band-sliders__label">
+                Black percentile <span>{lowPercentile.toFixed(1)}%</span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={20}
+                step={0.5}
+                value={lowPercentile}
+                disabled={current.mode === "clip"}
+                onChange={(event) => updateSetting({ lowPercentile: Number(event.target.value) })}
+                className="band-slider"
+              />
+            </label>
+
+            <label className="band-sliders__item">
+              <span className="band-sliders__label">
+                White percentile <span>{highPercentile.toFixed(1)}%</span>
+              </span>
+              <input
+                type="range"
+                min={80}
+                max={100}
+                step={0.5}
+                value={highPercentile}
+                disabled={current.mode === "clip"}
+                onChange={(event) => updateSetting({ highPercentile: Number(event.target.value) })}
+                className="band-slider"
+              />
+            </label>
+
+            <label className="band-sliders__item">
+              <span className="band-sliders__label">
+                Gamma <span>{gamma.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0.4}
+                max={2.5}
+                step={0.05}
+                value={gamma}
+                onChange={(event) => updateSetting({ gamma: Number(event.target.value) })}
+                className="band-slider"
+              />
+            </label>
+          </div>
+
+          <div className="display-window__actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => updateSetting({ mode: "luminance", lowPercentile: 1, highPercentile: 99, gamma: 1 })}
+            >
+              Auto luminance
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => updateSetting({ mode: "channel", lowPercentile: 1, highPercentile: 99, gamma: 1 })}
+            >
+              Auto channels
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => updateSetting({ mode: "clip", lowPercentile: 1, highPercentile: 99, gamma: 1 })}
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function HSIViewer({
   measurementName,
   bands,
   rgb,
+  displaySettings,
+  displayStats,
   idxs,
   onChange,
+  onDisplaySettingsChange,
   selections = [],
   allSelections = [],
   currentSelections = [],
@@ -107,6 +306,7 @@ export default function HSIViewer({
   const [zoomPercent, setZoomPercent] = useState(100);
   const [toolMode, setToolMode] = useState("draw");
   const [activeControlPanel, setActiveControlPanel] = useState("frgb");
+  const [displayWindowOpen, setDisplayWindowOpen] = useState(false);
   const { containerRef: panContainerRef, isDragging: isPanning, handleMouseDown: handlePanMouseDown } = useDragPan(toolMode === "pan");
 
   useEffect(() => {
@@ -118,6 +318,7 @@ export default function HSIViewer({
     setZoomPercent(100);
     setToolMode("draw");
     setActiveControlPanel("frgb");
+    setDisplayWindowOpen(false);
   }, [measurementName]);
 
   useEffect(() => {
@@ -296,6 +497,13 @@ export default function HSIViewer({
                   <>
                     <div className="display-sliders__header">
                       <span className="annotation-tools__label">False RGB controls</span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn--compact"
+                        onClick={() => setDisplayWindowOpen(true)}
+                      >
+                        Adjust
+                      </button>
                     </div>
                     {["R", "G", "B"].map((channel, index) => (
                       <div key={channel} className="band-sliders__item">
@@ -494,6 +702,14 @@ export default function HSIViewer({
             onRemoveSelection={onRemoveSelection}
           />
       </section>
+      {displayWindowOpen && (
+        <DisplayScalingWindow
+          settings={displaySettings}
+          stats={displayStats}
+          onChange={onDisplaySettingsChange}
+          onClose={() => setDisplayWindowOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -1,51 +1,7 @@
 import numpy as np
-import sys
-import types
 import json
+import cv2
 from fastapi.testclient import TestClient
-
-
-mock_cv2 = types.ModuleType("cv2")
-mock_cv2.COLOR_RGB2BGR = 0
-mock_cv2.COLORMAP_TURBO = 1
-mock_cv2.COLORMAP_MAGMA = 2
-mock_cv2.COLORMAP_VIRIDIS = 3
-mock_cv2.COLORMAP_PLASMA = 4
-mock_cv2.COLORMAP_INFERNO = 5
-
-
-def _imencode_stub(*_args, **_kwargs):
-    image = _args[1] if len(_args) > 1 else np.array([], dtype=np.uint8)
-    return True, np.asarray(image, dtype=np.uint8).reshape(-1)
-
-
-def _cvt_color_stub(image, _code):
-    return image
-
-
-def _apply_color_map_stub(image, _colormap):
-    if image.ndim == 2:
-        return np.stack([image, image, image], axis=-1)
-    return image
-
-
-def _fill_poly_stub(image, polygons, color):
-    polygon = np.asarray(polygons[0], dtype=np.int32)
-    xs = polygon[:, 0]
-    ys = polygon[:, 1]
-    x0 = max(0, int(xs.min()))
-    x1 = min(image.shape[1], int(xs.max()) + 1)
-    y0 = max(0, int(ys.min()))
-    y1 = min(image.shape[0], int(ys.max()) + 1)
-    image[y0:y1, x0:x1] = color
-    return image
-
-
-mock_cv2.imencode = _imencode_stub
-mock_cv2.cvtColor = _cvt_color_stub
-mock_cv2.applyColorMap = _apply_color_map_stub
-mock_cv2.fillPoly = _fill_poly_stub
-sys.modules.setdefault("cv2", mock_cv2)
 
 
 from main import app
@@ -130,7 +86,7 @@ def test_rgb_endpoint_blacks_out_pixels_outside_roi():
     }
     res = client.post("/rgb", json=payload)
     assert res.status_code == 200
-    rgb = np.frombuffer(bytes.fromhex(res.json()["image"]), dtype=np.uint8)
+    rgb = cv2.imdecode(np.frombuffer(bytes.fromhex(res.json()["image"]), dtype=np.uint8), cv2.IMREAD_COLOR)
     assert rgb.size == main.CUBE.shape[0] * main.CUBE.shape[1] * 3
     assert np.count_nonzero(rgb == 0) > 0
 
@@ -195,3 +151,57 @@ def test_load_saved_annotations_rehydrates_spectra(tmp_path):
     assert loaded[0]["lineStyle"] == "dot"
     assert loaded[0]["shape"]["type"] == "rectangle"
     assert loaded[0]["bounds"] == {"x0": 0, "x1": 2, "y0": 0, "y1": 2}
+
+
+def test_save_registration_persists_json_next_to_moving_image(tmp_path):
+    payload = {
+        "method": "affine",
+        "referenceImage": {
+            "measurementId": "measurement-a",
+            "name": "reference",
+            "folderPath": str(tmp_path),
+            "dataHdrName": "reference.hdr",
+            "width": 16,
+            "height": 12,
+        },
+        "movingImage": {
+            "measurementId": "measurement-b",
+            "name": "moving",
+            "folderPath": str(tmp_path),
+            "dataHdrName": "moving.hdr",
+            "width": 16,
+            "height": 12,
+        },
+        "pointPairs": [
+            {
+                "index": 1,
+                "reference": {"x": 1, "y": 2},
+                "moving": {"x": 3, "y": 4},
+            }
+        ],
+        "registrationParameters": {
+            "matrix3x3": [[1, 0, 2], [0, 1, 3], [0, 0, 1]],
+            "meanResidualPixels": 0.5,
+        },
+    }
+    res = client.post("/registration", json=payload)
+    assert res.status_code == 200
+    registration_path = tmp_path / "moving.registration.json"
+    assert registration_path.exists()
+    saved = json.loads(registration_path.read_text(encoding="utf-8"))
+    assert saved["method"] == "affine"
+    assert saved["movingImage"]["dataHdrName"] == "moving.hdr"
+    assert saved["registrationParameters"]["matrix3x3"][0][2] == 2
+
+
+def test_raw_rgb_uses_full_dynamic_range_without_changing_spectra():
+    cube = np.arange(300., 348., dtype=np.float32).reshape(4, 4, 3)
+    original = cube.copy()
+    rgb, metadata = main._scale_rgb_for_display(cube, [0, 1, 2], None, {'mode': 'channel'})
+    assert main._default_display_mode(cube) == 'channel'
+    assert rgb.min() == 0 and rgb.max() == 255
+    assert np.unique(rgb).size > 10
+    assert metadata['histogram']['range'][1] == 347
+    assert metadata['histogram']['channels'][0]['p1'] > 300
+    np.testing.assert_array_equal(cube, original)
+    assert main._default_display_mode(cube / 400) == 'clip'

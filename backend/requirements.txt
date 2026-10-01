@@ -6,3 +6,5 @@ spectral
 python-multipart
 httpx
 matplotlib
+scipy
+scikit-learn
