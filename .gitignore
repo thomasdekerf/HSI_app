@@ -23,3 +23,9 @@ dist/
 patch
 
 HSI_analysis/
+
+# Desktop packaging and local tools
+.venv-build/
+build/
+.DS_Store
+.pytest_cache/

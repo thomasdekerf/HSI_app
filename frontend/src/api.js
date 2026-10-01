@@ -1,4 +1,6 @@
-const API = "http://127.0.0.1:8000";
+// The installed app serves the UI and API from the same local server.
+// Keep the existing two-server workflow for npm start.
+const API = process.env.NODE_ENV === "production" ? "/api" : "http://127.0.0.1:8000";
 
 export async function listMeasurements(folderPath) {
   const params = new URLSearchParams({ folder_path: folderPath });
